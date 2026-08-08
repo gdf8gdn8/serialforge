@@ -151,7 +151,8 @@ if response.contains("OK") {
 
 ---
 
-## 📄 License
+## License & AI Provenance
 
-Distributed under the **MIT License**. See `LICENSE` for details.
-a
+This project is licensed under the [MIT License](LICENSE).
+
+This repository contains AI-assisted code generation. For full disclosures on human vs. AI authorship, copyright status, and third-party dependency tracking, see [`PROVENANCE.md`](PROVENANCE.md) and [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md).
