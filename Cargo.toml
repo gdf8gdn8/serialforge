@@ -1,0 +1,63 @@
+[package]
+name = "serialforge"
+version = "0.1.0"
+edition = "2024"
+description = "serialforge is a high-performance, cross-platform serial terminal written in Rust, inspired by HTerm and SerialGUI-rs."
+[dependencies]
+eframe = "0.36"
+egui = "0.36"
+serialport = "4.3"
+crossbeam-channel = "0.5"
+rfd = "0.17"         # Native file open dialogs
+rhai = "1.18"        # Embedded scripting engine
+chrono = "0.4"      # Precise UI timestamps
+
+[target.'cfg(windows)'.dev-dependencies]
+winres = "0.1"
+
+[profile.release]
+opt-level = 'z'
+debug = false    #[cfg()]
+rpath = false
+lto = false
+debug-assertions = false
+codegen-units = 16
+panic = 'unwind'
+incremental = false
+overflow-checks = false
+
+[package.metadata.deb]
+maintainer = "Uwe Strempel <u.strempel@gmail.com>"
+copyright = "2026, Uwe Strempel <u.strempel@gmail.com>"
+license-file = ["LICENSE", "4"]
+extended-description = """\
+serialforge is a high-performance, cross-platform serial terminal written in Rust,
+inspired by HTerm and SerialGUI-rs.
+
+Features include:
+  * Modern, hardware-accelerated GUI powered by egui.
+  * Live display switching between ASCII, HEX, and Mixed view modes.
+  * Non-blocking background serial I/O worker thread for high throughput.
+  * Embedded Rhai scripting engine for test automation and sequence execution.
+  * Paced binary file transmission with customizable chunk size and delays.
+  * Preconfigured command macros (presets) and command history with arrow navigation.
+  * Extended line ending options (None, NULL, CR, LF, CRLF, ETX).
+  * System activity log console and dynamic dark/light theme switching.
+"""
+depends = "$auto"
+section = "utility"
+priority = "optional"
+assets = [
+    # cargo-deb will automatically replace "target/release" with the actual target dir
+    ["target/release/serialforge", "usr/bin/serialforge", "755"],
+    
+    # Desktop integration (App menu entry)
+    ["scripts/serialforge.desktop", "usr/share/applications/serialforge.desktop", "644"],
+    
+    # Icons
+    ["assets/serialforge.png", "usr/share/icons/hicolor/512x512/apps/serialforge.png", "644"],
+    ["assets/serialforge.png", "usr/share/pixmaps/serialforge.png", "644"],
+    
+    # Application documentation
+    ["README.md", "usr/share/doc/serialforge/README.md", "644"],
+]

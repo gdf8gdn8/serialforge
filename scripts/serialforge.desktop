@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=SerialForge
+Comment=Platform-independent serial terminal with Rhai scripting
+Exec=serialforge
+Icon=serialforge
+Categories=Development;Engineering;
+Terminal=false

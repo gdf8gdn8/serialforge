@@ -1,0 +1,30 @@
+# Maintainer: gdf8gdn8 <gdf8gdn8@users.noreply.github.com>
+pkgname=serialforge
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Platform-independent serial terminal written in Rust with egui and Rhai scripting"
+arch=('x86_64')
+url="https://github.com/gdf8gdn8/serialforge"
+license=('MIT')
+depends=('systemd-libs' 'libx11' 'libxcursor' 'libxrandr' 'libxi' 'libxkbcommon' 'mesa')
+makedepends=('cargo' 'pkgconf')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+prepare() {
+  cd "$pkgname-$pkgver"
+  export CARGO_HOME="$SRCDEST/cargo-home"
+  cargo fetch --locked --target "$CARCH-unknown-linux-gnu"
+}
+
+build() {
+  cd "$pkgname-$pkgver"
+  export CARGO_HOME="$SRCDEST/cargo-home"
+  cargo build --frozen --release
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  install -Dm755 "target/release/serialforge" "$pkgdir/usr/bin/serialforge"
+  install -Dm644 "scripts/serialforge.desktop" "$pkgdir/usr/share/applications/serialforge.desktop"
+}
