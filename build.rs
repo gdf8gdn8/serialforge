@@ -1,7 +1,7 @@
 fn main() {
     // Only compile resources when target OS is Windows
     #[cfg(target_os = "windows")]
-     {
+    {
         let icon_path = std::path::Path::new("assets/serialforge.ico");
         if icon_path.exists() {
             let mut res = winres::WindowsResource::new();
@@ -18,7 +18,9 @@ fn main() {
                 eprintln!("Warning: Could not compile Windows resource icon: {e}");
             }
         } else {
-            println!("cargo:warning=assets/serialforge.ico not found, skipping Windows executable icon.");
+            println!(
+                "cargo:warning=assets/serialforge.ico not found, skipping Windows executable icon."
+            );
         }
     }
 }

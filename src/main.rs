@@ -1,8 +1,8 @@
 use chrono::Local;
 use crossbeam_channel::{
-    unbounded,
     Receiver,
     Sender,
+    unbounded,
 };
 use eframe::egui;
 use rfd::FileDialog;
@@ -404,7 +404,7 @@ pub struct SerialForgeApp {
     rx_buffer: Vec<u8>,
     view_mode: ViewMode,
     auto_scroll: bool,
-    show_timestamps: bool,
+    //show_timestamps: bool,
     rx_bytes: usize,
     tx_bytes: usize,
 
@@ -472,7 +472,7 @@ impl SerialForgeApp {
             rx_buffer: Vec::new(),
             view_mode: ViewMode::Ascii,
             auto_scroll: true,
-            show_timestamps: true,
+           // show_timestamps: true,
             rx_bytes: 0,
             tx_bytes: 0,
             active_tab: ToolTab::TransmitPresets,
@@ -674,53 +674,131 @@ impl eframe::App for SerialForgeApp {
 
         // 1. TOP PANEL: Hardware Setup & Theme Switcher
         egui::Panel::top("top_panel").show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.heading("SerialForge Terminal");
-                ui.separator();
-
-                if ui.button("🔄 Refresh").clicked() {
-                    self.refresh_ports();
-                }
-
-                egui::ComboBox::from_label("Port")
-                    .selected_text(&self.selected_port)
-                    .show_ui(ui, |ui| {
-                        for p in &self.available_ports {
-                            ui.selectable_value(&mut self.selected_port, p.clone(), p);
+            ui.horizontal_wrapped(|ui| {
+                // ---------------------------------------------------------
+                // GROUP 1: Connection & Port Selection
+                // ---------------------------------------------------------
+                ui.horizontal(|ui| {
+                    if !self.is_connected {
+                        if ui.button("🔌 Connect").clicked() {
+                            let _ = self.cmd_tx.send(TxCmd::Connect {
+                                port_name: self.selected_port.clone(),
+                                baud_rate: self.baud_rate,
+                                data_bits: self.data_bits,
+                                stop_bits: self.stop_bits,
+                                parity: self.parity,
+                                flow_control: self.flow_control,
+                            });
                         }
-                    });
-
-                egui::ComboBox::from_label("Baud")
-                    .selected_text(format!("{}", self.baud_rate))
-                    .show_ui(ui, |ui| {
-                        for b in [9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600] {
-                            ui.selectable_value(&mut self.baud_rate, b, b.to_string());
-                        }
-                    });
-
-                if !self.is_connected {
-                    if ui.button("🔌 Connect").clicked() {
-                        let _ = self.cmd_tx.send(TxCmd::Connect {
-                            port_name: self.selected_port.clone(),
-                            baud_rate: self.baud_rate,
-                            data_bits: self.data_bits,
-                            stop_bits: self.stop_bits,
-                            parity: self.parity,
-                            flow_control: self.flow_control,
-                        });
+                    } else if ui.button("❌ Disconnect").clicked() {
+                        let _ = self.cmd_tx.send(TxCmd::Disconnect);
                     }
-                } else if ui.button("❌ Disconnect").clicked() {
-                    let _ = self.cmd_tx.send(TxCmd::Disconnect);
-                }
+
+                    ui.label("Port:");
+                    egui::ComboBox::from_id_salt("port_combo")
+                        .selected_text(&self.selected_port)
+                        .show_ui(ui, |ui| {
+                            for p in &self.available_ports {
+                                ui.selectable_value(&mut self.selected_port, p.clone(), p);
+                            }
+                        });
+
+                    if ui.button("🔄 R").clicked() {
+                        self.refresh_ports();
+                    }
+                });
+
+                ui.separator(); // Draws a vertical line between groups
+
+                // ---------------------------------------------------------
+                // GROUP 2: Baud Rate & Data Bits
+                // ---------------------------------------------------------
+                ui.horizontal(|ui| {
+                    ui.label("Baud:");
+                    egui::ComboBox::from_id_salt("baud_combo")
+                    .width(0.0)
+                        .selected_text(format!("{}", self.baud_rate))
+                        .show_ui(ui, |ui| {
+                            for b in [9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600] {
+                                ui.selectable_value(&mut self.baud_rate, b, b.to_string());
+                            }
+                        });
+
+                    ui.label("Data:");
+                    egui::ComboBox::from_id_salt("data_combo")
+                    .width(0.0)
+                        .selected_text(format!("{}", self.data_bits))
+                        .show_ui(ui, |ui| {
+                            for b in [
+                                DataBits::Five,
+                                DataBits::Six,
+                                DataBits::Seven,
+                                DataBits::Eight,
+                            ] {
+                                ui.selectable_value(&mut self.data_bits, b, b.to_string());
+                            }
+                        });
+                });
 
                 ui.separator();
-                if ui.checkbox(&mut self.rts, "RTS").changed() && self.is_connected {
-                    let _ = self.cmd_tx.send(TxCmd::SetRts(self.rts));
-                }
-                if ui.checkbox(&mut self.dtr, "DTR").changed() && self.is_connected {
-                    let _ = self.cmd_tx.send(TxCmd::SetDtr(self.dtr));
-                }
 
+                // ---------------------------------------------------------
+                // GROUP 3: Parity & Stop Bits
+                // ---------------------------------------------------------
+                ui.horizontal_centered(|ui| {
+                    ui.label("Parity:");
+                    egui::ComboBox::from_id_salt("parity_combo")
+                    .width(0.0)
+                        .selected_text(format!("{}", self.parity))
+                        .show_ui(ui, |ui| {
+                            for b in [Parity::None, Parity::Odd, Parity::Even] {
+                                ui.selectable_value(&mut self.parity, b, b.to_string());
+                            }
+                        });
+
+                    ui.label("Bits:");
+                    egui::ComboBox::from_id_salt("bits_combo")
+                    .width(0.0)
+                        .selected_text(format!("{}", self.stop_bits))
+                        .show_ui(ui, |ui| {
+                            for b in [StopBits::One, StopBits::Two] {
+                                ui.selectable_value(&mut self.stop_bits, b, b.to_string());
+                            }
+                        });
+                });
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Flow:");
+                    egui::ComboBox::from_id_salt("flow_control_combo")
+                    .width(0.0)
+                        .selected_text(format!("{}", self.flow_control))
+                        .show_ui(ui, |ui| {
+                            for b in [
+                                FlowControl::None,
+                                FlowControl::Software,
+                                FlowControl::Hardware,
+                            ] {
+                                ui.selectable_value(&mut self.flow_control, b, b.to_string());
+                            }
+                        });
+                });
+                ui.separator();
+
+                // ---------------------------------------------------------
+                // GROUP 4: Hardware Control Signals
+                // ---------------------------------------------------------
+                ui.horizontal(|ui| {
+                    if ui.checkbox(&mut self.rts, "RTS").changed() && self.is_connected {
+                        let _ = self.cmd_tx.send(TxCmd::SetRts(self.rts));
+                    }
+                    if ui.checkbox(&mut self.dtr, "DTR").changed() && self.is_connected {
+                        let _ = self.cmd_tx.send(TxCmd::SetDtr(self.dtr));
+                    }
+                });
+
+                // ---------------------------------------------------------
+                // GROUP 5: Right-Aligned Theme Toggle
+                // ---------------------------------------------------------
+                // This pushes the theme button to the far right of the available space
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let theme_btn = if self.dark_mode {
                         "🌙 Dark"
@@ -991,9 +1069,13 @@ impl eframe::App for SerialForgeApp {
                     ui.columns(2, |cols| {
                         cols[0].label("Rhai Script Editor:");
 
-  let layouter = &mut |ui: &egui::Ui, string: &dyn egui::TextBuffer, _wrap_width: f32| {
-    ui.painter().layout_job(highlight_rhai_code(ui, string.as_str()))
-};
+                        let layouter =
+                            &mut |ui: &egui::Ui,
+                                  string: &dyn egui::TextBuffer,
+                                  _wrap_width: f32| {
+                                ui.painter()
+                                    .layout_job(highlight_rhai_code(ui, string.as_str()))
+                            };
 
                         cols[0].add(
                             egui::TextEdit::multiline(&mut self.script_text)
@@ -1041,7 +1123,8 @@ impl eframe::App for SerialForgeApp {
 
                 ui.separator();
                 ui.checkbox(&mut self.auto_scroll, "Auto-Scroll");
-                ui.checkbox(&mut self.show_timestamps, "Timestamps");
+                // TODO
+                // ui.checkbox(&mut self.show_timestamps, "Timestamps");
 
                 if ui.button("🗑 Clear Console").clicked() {
                     self.rx_buffer.clear();
