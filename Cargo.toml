@@ -9,7 +9,7 @@ egui = "0.36"
 serialport = "4"
 crossbeam-channel = "0.5"
 rfd = "0.17"         # Native file open dialogs
-rhai = "1.18"        # Embedded scripting engine
+rhai = "1.26"        # Embedded scripting engine
 chrono = "0.4"      # Precise UI timestamps
 
 [target.'cfg(windows)'.dev-dependencies]
