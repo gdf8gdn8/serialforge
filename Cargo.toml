@@ -17,14 +17,15 @@ winres = "0.1"
 
 [profile.release]
 opt-level = 'z'
-debug = false    #[cfg()]
+debug = false
 rpath = true
 lto = true
 debug-assertions = false
-codegen-units = 16
+codegen-units = 1
 panic = 'unwind'
 incremental = false
 overflow-checks = true
+strip = true
 
 [package.metadata.deb]
 maintainer = "Uwe Strempel <u.strempel@gmail.com>"
