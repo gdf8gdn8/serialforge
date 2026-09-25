@@ -29,4 +29,4 @@ EOF
 chmod +x "$APP_DIR/AppRun"
 
 echo "Bundling AppImage..."
-ARCH=x86_64 appimagetool-bin "$APP_DIR" "SerialForge-x86_64.AppImage"
+ARCH=x86_64 appimagetool "$APP_DIR" "SerialForge-x86_64.AppImage"
