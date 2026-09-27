@@ -7,7 +7,7 @@ default: build-all
 
 # Build the Ubuntu 26.04 Docker builder image
 docker-build:
-    docker build -t {{image_tag}} .
+    docker buildx build -t {{image_tag}} .
 
 # Cross-compile native Linux binary
 build-linux: docker-build
@@ -37,3 +37,15 @@ build-all: build-linux build-windows build-appimage build-deb
 clean:
     cargo clean
     rm -rf AppDir *.AppImage
+
+fmt:
+    cargo +nightly fmt --all -- --check
+
+fmt-fix:
+    cargo +nightly fmt --all
+
+check:
+    cargo +nightly clippy
+
+run:
+    cargo run
