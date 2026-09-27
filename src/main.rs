@@ -303,10 +303,10 @@ fn spawn_serial_worker(
                         let _ = evt_tx.send(RxEvent::Disconnected);
                     }
                     TxCmd::SendData(bytes) => {
-                        if let Some(ref mut p) = port {
-                            if let Err(e) = p.write_all(&bytes) {
-                                let _ = evt_tx.send(RxEvent::Error(format!("Tx error: {e}")));
-                            }
+                        if let Some(ref mut p) = port
+                            && let Err(e) = p.write_all(&bytes)
+                        {
+                            let _ = evt_tx.send(RxEvent::Error(format!("Tx error: {e}")));
                         }
                     }
                     TxCmd::SendFile {
@@ -314,31 +314,31 @@ fn spawn_serial_worker(
                         chunk_size,
                         delay_ms,
                     } => {
-                        if let Some(ref mut p) = port {
-                            if let Ok(mut f) = File::open(&path) {
-                                let total = f.metadata().map(|m| m.len() as usize).unwrap_or(0);
-                                let mut sent = 0;
-                                let mut chunk = vec![0u8; chunk_size];
+                        if let Some(ref mut p) = port
+                            && let Ok(mut f) = File::open(&path)
+                        {
+                            let total = f.metadata().map(|m| m.len() as usize).unwrap_or(0);
+                            let mut sent = 0;
+                            let mut chunk = vec![0u8; chunk_size];
 
-                                while let Ok(n) = f.read(&mut chunk) {
-                                    if n == 0 {
-                                        break;
-                                    }
-                                    if p.write_all(&chunk[..n]).is_err() {
-                                        let _ = evt_tx.send(RxEvent::Error(
-                                            "File transfer failed during write".into(),
-                                        ));
-                                        break;
-                                    }
-                                    sent += n;
-                                    let _ = evt_tx.send(RxEvent::FileSendProgress { sent, total });
-                                    ctx.request_repaint();
-                                    if delay_ms > 0 {
-                                        thread::sleep(Duration::from_millis(delay_ms));
-                                    }
+                            while let Ok(n) = f.read(&mut chunk) {
+                                if n == 0 {
+                                    break;
                                 }
-                                let _ = evt_tx.send(RxEvent::FileSendComplete);
+                                if p.write_all(&chunk[..n]).is_err() {
+                                    let _ = evt_tx.send(RxEvent::Error(
+                                        "File transfer failed during write".into(),
+                                    ));
+                                    break;
+                                }
+                                sent += n;
+                                let _ = evt_tx.send(RxEvent::FileSendProgress { sent, total });
+                                ctx.request_repaint();
+                                if delay_ms > 0 {
+                                    thread::sleep(Duration::from_millis(delay_ms));
+                                }
                             }
+                            let _ = evt_tx.send(RxEvent::FileSendComplete);
                         }
                     }
                     TxCmd::SetRts(val) => {
@@ -465,14 +465,14 @@ impl SerialForgeApp {
             rts: false,
             dtr: false,
             is_connected: false,
-            dark_mode: true,
+            dark_mode: false,
             cmd_tx,
             evt_rx,
             script_rx_rx,
             rx_buffer: Vec::new(),
             view_mode: ViewMode::Ascii,
             auto_scroll: true,
-           // show_timestamps: true,
+            // show_timestamps: true,
             rx_bytes: 0,
             tx_bytes: 0,
             active_tab: ToolTab::TransmitPresets,
@@ -716,7 +716,7 @@ impl eframe::App for SerialForgeApp {
                 ui.horizontal(|ui| {
                     ui.label("Baud:");
                     egui::ComboBox::from_id_salt("baud_combo")
-                    .width(0.0)
+                        .width(0.0)
                         .selected_text(format!("{}", self.baud_rate))
                         .show_ui(ui, |ui| {
                             for b in [9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600] {
@@ -726,7 +726,7 @@ impl eframe::App for SerialForgeApp {
 
                     ui.label("Data:");
                     egui::ComboBox::from_id_salt("data_combo")
-                    .width(0.0)
+                        .width(0.0)
                         .selected_text(format!("{}", self.data_bits))
                         .show_ui(ui, |ui| {
                             for b in [
@@ -748,7 +748,7 @@ impl eframe::App for SerialForgeApp {
                 ui.horizontal_centered(|ui| {
                     ui.label("Parity:");
                     egui::ComboBox::from_id_salt("parity_combo")
-                    .width(0.0)
+                        .width(0.0)
                         .selected_text(format!("{}", self.parity))
                         .show_ui(ui, |ui| {
                             for b in [Parity::None, Parity::Odd, Parity::Even] {
@@ -758,7 +758,7 @@ impl eframe::App for SerialForgeApp {
 
                     ui.label("Bits:");
                     egui::ComboBox::from_id_salt("bits_combo")
-                    .width(0.0)
+                        .width(0.0)
                         .selected_text(format!("{}", self.stop_bits))
                         .show_ui(ui, |ui| {
                             for b in [StopBits::One, StopBits::Two] {
@@ -769,7 +769,7 @@ impl eframe::App for SerialForgeApp {
                 ui.horizontal_wrapped(|ui| {
                     ui.label("Flow:");
                     egui::ComboBox::from_id_salt("flow_control_combo")
-                    .width(0.0)
+                        .width(0.0)
                         .selected_text(format!("{}", self.flow_control))
                         .show_ui(ui, |ui| {
                             for b in [
@@ -868,16 +868,16 @@ impl eframe::App for SerialForgeApp {
                                     self.cmd_history_idx = Some(next_idx);
                                     self.send_text = self.cmd_history[next_idx].clone();
                                 }
-                            } else if ui.input(|i| i.key_pressed(egui::Key::ArrowDown)) {
-                                if let Some(idx) = self.cmd_history_idx {
-                                    if idx + 1 < self.cmd_history.len() {
-                                        let next_idx = idx + 1;
-                                        self.cmd_history_idx = Some(next_idx);
-                                        self.send_text = self.cmd_history[next_idx].clone();
-                                    } else {
-                                        self.cmd_history_idx = None;
-                                        self.send_text.clear();
-                                    }
+                            } else if ui.input(|i| i.key_pressed(egui::Key::ArrowDown))
+                                && let Some(idx) = self.cmd_history_idx
+                            {
+                                if idx + 1 < self.cmd_history.len() {
+                                    let next_idx = idx + 1;
+                                    self.cmd_history_idx = Some(next_idx);
+                                    self.send_text = self.cmd_history[next_idx].clone();
+                                } else {
+                                    self.cmd_history_idx = None;
+                                    self.send_text.clear();
                                 }
                             }
                         }
@@ -1024,10 +1024,10 @@ impl eframe::App for SerialForgeApp {
                 ToolTab::BinaryFile => {
                     ui.horizontal(|ui| {
                         ui.label("Binary Payload:");
-                        if ui.button("📁 Select File").clicked() {
-                            if let Some(path) = FileDialog::new().pick_file() {
-                                self.file_path = Some(path);
-                            }
+                        if ui.button("📁 Select File").clicked()
+                            && let Some(path) = FileDialog::new().pick_file()
+                        {
+                            self.file_path = Some(path);
                         }
 
                         if let Some(ref path) = self.file_path {
@@ -1037,14 +1037,15 @@ impl eframe::App for SerialForgeApp {
                         ui.add(egui::DragValue::new(&mut self.chunk_size).prefix("Chunk size: "));
                         ui.add(egui::DragValue::new(&mut self.chunk_delay_ms).prefix("Delay ms: "));
 
-                        if ui.button("📤 Transmit File").clicked() && self.is_connected {
-                            if let Some(ref path) = self.file_path {
-                                let _ = self.cmd_tx.send(TxCmd::SendFile {
-                                    path: path.clone(),
-                                    chunk_size: self.chunk_size,
-                                    delay_ms: self.chunk_delay_ms,
-                                });
-                            }
+                        if ui.button("📤 Transmit File").clicked()
+                            && self.is_connected
+                            && let Some(ref path) = self.file_path
+                        {
+                            let _ = self.cmd_tx.send(TxCmd::SendFile {
+                                path: path.clone(),
+                                chunk_size: self.chunk_size,
+                                delay_ms: self.chunk_delay_ms,
+                            });
                         }
                     });
 
