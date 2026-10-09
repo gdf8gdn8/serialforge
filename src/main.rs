@@ -249,13 +249,20 @@ fn highlight_rhai_code(ui: &egui::Ui, code: &str) -> egui::text::LayoutJob {
             continue;
         }
 
-        // Plain Text
-        let ch = chars[i];
-        i += 1;
-        let mut s = String::new();
-        s.push(ch);
+        // Plain Text (group consecutive plain characters)
+        let start = i;
+        while i < len {
+            let is_comment = i + 1 < len && chars[i] == '/' && chars[i + 1] == '/';
+            let is_string = chars[i] == '"';
+            let is_ident = chars[i].is_alphabetic() || chars[i] == '_';
+            if is_comment || is_string || is_ident {
+                break;
+            }
+            i += 1;
+        }
+        let text: String = chars[start..i].iter().collect();
         job.append(
-            &s,
+            &text,
             0.0,
             TextFormat {
                 font_id: font_id.clone(),
@@ -367,7 +374,8 @@ fn spawn_serial_worker(
                                         }
 
                                         sent += n;
-                                        let _ = evt_tx.send(RxEvent::FileSendProgress { sent, total });
+                                        let _ =
+                                            evt_tx.send(RxEvent::FileSendProgress { sent, total });
                                         ctx.request_repaint();
 
                                         // Drain incoming serial RX data during transfer to prevent buffer overrun
@@ -434,7 +442,8 @@ fn spawn_serial_worker(
                     }
                     Ok(0) => {
                         port = None;
-                        let _ = evt_tx.send(RxEvent::Error("Serial device disconnected (EOF)".into()));
+                        let _ =
+                            evt_tx.send(RxEvent::Error("Serial device disconnected (EOF)".into()));
                         let _ = evt_tx.send(RxEvent::Disconnected);
                         ctx.request_repaint();
                     }
@@ -478,6 +487,7 @@ pub struct SerialForgeApp {
 
     rx_buffer: Vec<u8>,
     view_mode: ViewMode,
+    cached_formatted_text: Option<String>,
     auto_scroll: bool,
     //show_timestamps: bool,
     rx_bytes: usize,
@@ -554,6 +564,7 @@ impl SerialForgeApp {
             script_rx_rx,
             rx_buffer: Vec::new(),
             view_mode: ViewMode::Ascii,
+            cached_formatted_text: None,
             auto_scroll: true,
             // show_timestamps: true,
             rx_bytes: 0,
@@ -644,6 +655,12 @@ if resp.contains("OK") {
                 RxEvent::DataReceived(bytes) => {
                     self.rx_bytes += bytes.len();
                     self.rx_buffer.extend(bytes);
+                    const MAX_RX_BUFFER_SIZE: usize = 256 * 1024;
+                    if self.rx_buffer.len() > MAX_RX_BUFFER_SIZE {
+                        let excess = self.rx_buffer.len() - MAX_RX_BUFFER_SIZE;
+                        self.rx_buffer.drain(0..excess);
+                    }
+                    self.cached_formatted_text = None;
                 }
                 RxEvent::FileSendProgress { sent, total } => {
                     self.file_progress = Some((sent, total));
@@ -704,9 +721,11 @@ if resp.contains("OK") {
             self.script_text.replace_range(start..end, text);
 
             let new_char_pos = min_char + text.chars().count();
-            state.cursor.set_char_range(Some(egui::text_selection::CCursorRange::one(
-                egui::text::CCursor::new(new_char_pos),
-            )));
+            state
+                .cursor
+                .set_char_range(Some(egui::text_selection::CCursorRange::one(
+                    egui::text::CCursor::new(new_char_pos),
+                )));
             state.store(ctx, editor_id);
         } else {
             self.script_text.push_str(text);
@@ -796,6 +815,55 @@ if resp.contains("OK") {
             is_running.store(false, Ordering::Relaxed);
             ctx_clone.request_repaint();
         });
+    }
+
+    fn compute_formatted_text(&self) -> String {
+        use std::fmt::Write;
+        match self.view_mode {
+            ViewMode::Ascii => String::from_utf8_lossy(&self.rx_buffer).to_string(),
+            ViewMode::Hex => {
+                let mut out = String::with_capacity(
+                    self.rx_buffer.len().saturating_mul(3)
+                        + self.rx_buffer.len().checked_div(16).unwrap_or(0),
+                );
+                for (i, chunk) in self.rx_buffer.chunks(16).enumerate() {
+                    if i > 0 {
+                        out.push('\n');
+                    }
+                    for (j, &b) in chunk.iter().enumerate() {
+                        if j > 0 {
+                            out.push(' ');
+                        }
+                        let _ = write!(out, "{b:02X}");
+                    }
+                }
+                out
+            }
+            ViewMode::Mixed => {
+                let mut out = String::with_capacity(self.rx_buffer.len().saturating_mul(5));
+                for (i, chunk) in self.rx_buffer.chunks(16).enumerate() {
+                    if i > 0 {
+                        out.push('\n');
+                    }
+                    let mut hex_part = String::with_capacity(48);
+                    for (j, &b) in chunk.iter().enumerate() {
+                        if j > 0 {
+                            hex_part.push(' ');
+                        }
+                        let _ = write!(hex_part, "{b:02X}");
+                    }
+                    let _ = write!(out, "{hex_part:<48} | ");
+                    for &b in chunk {
+                        if b.is_ascii_graphic() || b == b' ' {
+                            out.push(b as char);
+                        } else {
+                            out.push('.');
+                        }
+                    }
+                }
+                out
+            }
+        }
     }
 }
 
@@ -1348,9 +1416,13 @@ impl eframe::App for SerialForgeApp {
         // 4. CENTRAL PANEL: Primary Serial Terminal Display
         egui::CentralPanel::default().show(ui, |ui| {
             ui.horizontal(|ui| {
+                let prev_mode = self.view_mode;
                 ui.selectable_value(&mut self.view_mode, ViewMode::Ascii, "ASCII");
                 ui.selectable_value(&mut self.view_mode, ViewMode::Hex, "HEX");
                 ui.selectable_value(&mut self.view_mode, ViewMode::Mixed, "Mixed");
+                if self.view_mode != prev_mode {
+                    self.cached_formatted_text = None;
+                }
 
                 ui.separator();
                 ui.checkbox(&mut self.auto_scroll, "Auto-Scroll");
@@ -1359,6 +1431,7 @@ impl eframe::App for SerialForgeApp {
 
                 if ui.button("🗑 Clear Console").clicked() {
                     self.rx_buffer.clear();
+                    self.cached_formatted_text = None;
                 }
             });
 
@@ -1368,47 +1441,13 @@ impl eframe::App for SerialForgeApp {
                 .auto_shrink([false; 2])
                 .stick_to_bottom(self.auto_scroll)
                 .show(ui, |ui| {
-                    let mut formatted_text = match self.view_mode {
-                        ViewMode::Ascii => String::from_utf8_lossy(&self.rx_buffer).to_string(),
-                        ViewMode::Hex => self
-                            .rx_buffer
-                            .chunks(16)
-                            .map(|chunk| {
-                                chunk
-                                    .iter()
-                                    .map(|b| format!("{b:02X}"))
-                                    .collect::<Vec<_>>()
-                                    .join(" ")
-                            })
-                            .collect::<Vec<_>>()
-                            .join("\n"),
-                        ViewMode::Mixed => self
-                            .rx_buffer
-                            .chunks(16)
-                            .map(|chunk| {
-                                let hex = chunk
-                                    .iter()
-                                    .map(|b| format!("{b:02X}"))
-                                    .collect::<Vec<_>>()
-                                    .join(" ");
-                                let ascii: String = chunk
-                                    .iter()
-                                    .map(|&b| {
-                                        if b.is_ascii_graphic() || b == b' ' {
-                                            b as char
-                                        } else {
-                                            '.'
-                                        }
-                                    })
-                                    .collect();
-                                format!("{hex:<48} | {ascii}")
-                            })
-                            .collect::<Vec<_>>()
-                            .join("\n"),
-                    };
+                    if self.cached_formatted_text.is_none() {
+                        self.cached_formatted_text = Some(self.compute_formatted_text());
+                    }
+                    let formatted_text = self.cached_formatted_text.as_mut().unwrap();
 
                     ui.add(
-                        egui::TextEdit::multiline(&mut formatted_text)
+                        egui::TextEdit::multiline(formatted_text)
                             .font(egui::TextStyle::Monospace)
                             .desired_width(f32::INFINITY)
                             .lock_focus(true),
