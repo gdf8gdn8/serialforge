@@ -2,3 +2,6 @@
 /AppDir
 .vscode
 *.AppImage
+*.d
+*.deb
+*.rpm
