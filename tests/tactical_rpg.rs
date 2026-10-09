@@ -95,6 +95,6 @@ mod tests {
             "weapon"
         );
         assert_eq!(item.get("value").unwrap().as_int().unwrap(), 100);
-        assert_eq!(item.get("equipped").unwrap().as_bool().unwrap(), false);
+        assert!(!item.get("equipped").unwrap().as_bool().unwrap());
     }
 }

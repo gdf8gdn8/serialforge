@@ -87,7 +87,7 @@ mod tests {
             )
             .expect("Failed evaluation call");
 
-        assert_eq!(result.get("success").unwrap().as_bool().unwrap(), true);
+        assert!(result.get("success").unwrap().as_bool().unwrap());
         assert_eq!(
             result.get("action").unwrap().clone().into_string().unwrap(),
             "activate"

@@ -277,6 +277,7 @@ fn spawn_serial_worker(
     evt_tx: Sender<RxEvent>,
     ctx: egui::Context,
     script_rx_tx: Sender<Vec<u8>>,
+    script_running: Arc<AtomicBool>,
 ) {
     thread::spawn(move || {
         let mut port: Option<Box<dyn SerialPort>> = None;
@@ -326,31 +327,85 @@ fn spawn_serial_worker(
                         chunk_size,
                         delay_ms,
                     } => {
-                        if let Some(ref mut p) = port
-                            && let Ok(mut f) = File::open(&path)
-                        {
-                            let total = f.metadata().map(|m| m.len() as usize).unwrap_or(0);
-                            let mut sent = 0;
-                            let mut chunk = vec![0u8; chunk_size];
+                        if port.is_none() {
+                            let _ = evt_tx.send(RxEvent::Error(
+                                "Cannot send file: serial port is not connected".into(),
+                            ));
+                        } else {
+                            match File::open(&path) {
+                                Err(e) => {
+                                    let _ = evt_tx.send(RxEvent::Error(format!(
+                                        "Failed to open file '{}': {e}",
+                                        path.display()
+                                    )));
+                                }
+                                Ok(mut f) => {
+                                    let total = f.metadata().map(|m| m.len() as usize).unwrap_or(0);
+                                    let mut sent = 0;
+                                    let effective_chunk = chunk_size.max(1);
+                                    let mut chunk = vec![0u8; effective_chunk];
+                                    let mut send_failed = false;
 
-                            while let Ok(n) = f.read(&mut chunk) {
-                                if n == 0 {
-                                    break;
-                                }
-                                if p.write_all(&chunk[..n]).is_err() {
-                                    let _ = evt_tx.send(RxEvent::Error(
-                                        "File transfer failed during write".into(),
-                                    ));
-                                    break;
-                                }
-                                sent += n;
-                                let _ = evt_tx.send(RxEvent::FileSendProgress { sent, total });
-                                ctx.request_repaint();
-                                if delay_ms > 0 {
-                                    thread::sleep(Duration::from_millis(delay_ms));
+                                    while let Ok(n) = f.read(&mut chunk) {
+                                        if n == 0 {
+                                            break;
+                                        }
+                                        if let Some(ref mut p) = port {
+                                            if let Err(e) = p.write_all(&chunk[..n]) {
+                                                let _ = evt_tx.send(RxEvent::Error(format!(
+                                                    "File transfer failed during write: {e}"
+                                                )));
+                                                send_failed = true;
+                                                break;
+                                            }
+                                        } else {
+                                            let _ = evt_tx.send(RxEvent::Error(
+                                                "File transfer aborted: port disconnected".into(),
+                                            ));
+                                            send_failed = true;
+                                            break;
+                                        }
+
+                                        sent += n;
+                                        let _ = evt_tx.send(RxEvent::FileSendProgress { sent, total });
+                                        ctx.request_repaint();
+
+                                        // Drain incoming serial RX data during transfer to prevent buffer overrun
+                                        if let Some(ref mut p) = port
+                                            && let Ok(n_read) = p.read(&mut read_buf)
+                                            && n_read > 0
+                                        {
+                                            let data = read_buf[..n_read].to_vec();
+                                            if script_running.load(Ordering::Relaxed) {
+                                                let _ = script_rx_tx.send(data.clone());
+                                            }
+                                            let _ = evt_tx.send(RxEvent::DataReceived(data));
+                                            ctx.request_repaint();
+                                        }
+
+                                        // Process any disconnect command during file transfer
+                                        if let Ok(cmd) = cmd_rx.try_recv()
+                                            && matches!(cmd, TxCmd::Disconnect)
+                                        {
+                                            port = None;
+                                            let _ = evt_tx.send(RxEvent::Disconnected);
+                                            let _ = evt_tx.send(RxEvent::Error(
+                                                "File transfer cancelled: user disconnected".into(),
+                                            ));
+                                            send_failed = true;
+                                            break;
+                                        }
+
+                                        if delay_ms > 0 {
+                                            thread::sleep(Duration::from_millis(delay_ms));
+                                        }
+                                    }
+
+                                    if !send_failed {
+                                        let _ = evt_tx.send(RxEvent::FileSendComplete);
+                                    }
                                 }
                             }
-                            let _ = evt_tx.send(RxEvent::FileSendComplete);
                         }
                     }
                     TxCmd::SetRts(val) => {
@@ -371,8 +426,16 @@ fn spawn_serial_worker(
                 match p.read(&mut read_buf) {
                     Ok(n) if n > 0 => {
                         let data = read_buf[..n].to_vec();
-                        let _ = script_rx_tx.send(data.clone());
+                        if script_running.load(Ordering::Relaxed) {
+                            let _ = script_rx_tx.send(data.clone());
+                        }
                         let _ = evt_tx.send(RxEvent::DataReceived(data));
+                        ctx.request_repaint();
+                    }
+                    Ok(0) => {
+                        port = None;
+                        let _ = evt_tx.send(RxEvent::Error("Serial device disconnected (EOF)".into()));
+                        let _ = evt_tx.send(RxEvent::Disconnected);
                         ctx.request_repaint();
                     }
                     Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => {}
@@ -456,7 +519,15 @@ impl SerialForgeApp {
         let (evt_tx, evt_rx) = unbounded();
         let (script_rx_tx, script_rx_rx) = unbounded();
 
-        spawn_serial_worker(cmd_rx, evt_tx, cc.egui_ctx.clone(), script_rx_tx);
+        let script_running = Arc::new(AtomicBool::new(false));
+
+        spawn_serial_worker(
+            cmd_rx,
+            evt_tx,
+            cc.egui_ctx.clone(),
+            script_rx_tx,
+            script_running.clone(),
+        );
 
         let ports = serialport::available_ports()
             .unwrap_or_default()
@@ -530,7 +601,7 @@ if resp.contains("OK") {
 }
 "#
             .to_string(),
-            script_running: Arc::new(AtomicBool::new(false)),
+            script_running,
             script_log: Arc::new(Mutex::new(Vec::new())),
             system_log: Vec::new(),
             status_msg: "Disconnected".to_string(),
@@ -584,6 +655,7 @@ if resp.contains("OK") {
                     self.log_system("Binary file transfer finished.");
                 }
                 RxEvent::Error(e) => {
+                    self.file_progress = None;
                     self.status_msg = format!("Error: {e}");
                     self.log_system(&format!("ERROR: {e}"));
                 }
@@ -634,16 +706,20 @@ if resp.contains("OK") {
         }
     }
 
-    fn run_script(&mut self) {
+    fn run_script(&mut self, ctx: &egui::Context) {
         if self.script_running.load(Ordering::Relaxed) {
             return;
         }
+
+        // Drain any stale messages from the script channel
+        while self.script_rx_rx.try_recv().is_ok() {}
 
         let script = self.script_text.clone();
         let cmd_tx = self.cmd_tx.clone();
         let script_rx_rx = self.script_rx_rx.clone();
         let is_running = self.script_running.clone();
         let log = self.script_log.clone();
+        let ctx_clone = ctx.clone();
 
         is_running.store(true, Ordering::Relaxed);
         log.lock().unwrap().clear();
@@ -653,8 +729,10 @@ if resp.contains("OK") {
             let mut engine = Engine::new();
 
             let log_clone = log.clone();
+            let ctx_print = ctx_clone.clone();
             engine.on_print(move |s| {
                 log_clone.lock().unwrap().push(s.to_string());
+                ctx_print.request_repaint();
             });
 
             let cmd_tx_send = cmd_tx.clone();
@@ -664,10 +742,11 @@ if resp.contains("OK") {
 
             let rx = script_rx_rx.clone();
             engine.register_fn("serial_read_line", move |timeout_ms: i64| -> String {
+                let timeout = Duration::from_millis(u64::try_from(timeout_ms.max(0)).unwrap_or(0));
                 let start = Instant::now();
                 let mut accumulated = String::new();
                 loop {
-                    if start.elapsed() > Duration::from_millis(timeout_ms as u64) {
+                    if start.elapsed() > timeout {
                         break;
                     }
                     if let Ok(bytes) = rx.try_recv() {
@@ -689,6 +768,7 @@ if resp.contains("OK") {
             }
 
             is_running.store(false, Ordering::Relaxed);
+            ctx_clone.request_repaint();
         });
     }
 }
@@ -1101,7 +1181,7 @@ impl eframe::App for SerialForgeApp {
                 ToolTab::Scripting => {
                     ui.horizontal(|ui| {
                         if ui.button("▶ Run Script").clicked() && self.is_connected {
-                            self.run_script();
+                            self.run_script(&ctx);
                         }
                         if ui.button("📂 Open Script").clicked()
                             && let Some(path) = FileDialog::new()
@@ -1307,6 +1387,21 @@ impl eframe::App for SerialForgeApp {
 // 6. App Entry Point
 // ==========================================
 
+fn main() -> eframe::Result<()> {
+    let native_options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([980.0, 760.0])
+            .with_title("SerialForge - Cross-Platform Serial Terminal"),
+        ..Default::default()
+    };
+
+    eframe::run_native(
+        "SerialForge Terminal",
+        native_options,
+        Box::new(|cc| Ok(Box::new(SerialForgeApp::new(cc)))),
+    )
+}
+
 #[cfg(test)]
 mod editor_tests {
     use super::*;
@@ -1345,19 +1440,4 @@ mod editor_tests {
             assert_eq!(text, source);
         }
     }
-}
-
-fn main() -> eframe::Result<()> {
-    let native_options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([980.0, 760.0])
-            .with_title("SerialForge - Cross-Platform Serial Terminal"),
-        ..Default::default()
-    };
-
-    eframe::run_native(
-        "SerialForge Terminal",
-        native_options,
-        Box::new(|cc| Ok(Box::new(SerialForgeApp::new(cc)))),
-    )
 }
