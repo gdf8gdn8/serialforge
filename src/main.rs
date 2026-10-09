@@ -664,17 +664,22 @@ if resp.contains("OK") {
     }
 
     fn send_string_command(&mut self, text: String) {
-        if text.is_empty() || !self.is_connected {
+        if !self.is_connected {
             return;
         }
 
-        if self.cmd_history.last() != Some(&text) {
+        let eol = self.line_ending.as_bytes();
+        if text.is_empty() && eol.is_empty() {
+            return;
+        }
+
+        if !text.is_empty() && self.cmd_history.last() != Some(&text) {
             self.cmd_history.push(text.clone());
         }
         self.cmd_history_idx = None;
 
         let mut payload = text.clone().into_bytes();
-        payload.extend_from_slice(self.line_ending.as_bytes());
+        payload.extend_from_slice(eol);
         self.tx_bytes += payload.len();
         let _ = self.cmd_tx.send(TxCmd::SendData(payload));
 
@@ -689,18 +694,20 @@ if resp.contains("OK") {
                 .map_or(value.len(), |(byte_index, _)| byte_index)
         };
 
-        if let Some(state) = egui::TextEdit::load_state(ctx, editor_id)
+        if let Some(mut state) = egui::TextEdit::load_state(ctx, editor_id)
             && let Some(range) = state.cursor.char_range()
         {
-            let start = byte_offset(
-                &self.script_text,
-                range.primary.index.0.min(range.secondary.index.0),
-            );
-            let end = byte_offset(
-                &self.script_text,
-                range.primary.index.0.max(range.secondary.index.0),
-            );
+            let min_char = range.primary.index.0.min(range.secondary.index.0);
+            let max_char = range.primary.index.0.max(range.secondary.index.0);
+            let start = byte_offset(&self.script_text, min_char);
+            let end = byte_offset(&self.script_text, max_char);
             self.script_text.replace_range(start..end, text);
+
+            let new_char_pos = min_char + text.chars().count();
+            state.cursor.set_char_range(Some(egui::text_selection::CCursorRange::one(
+                egui::text::CCursor::new(new_char_pos),
+            )));
+            state.store(ctx, editor_id);
         } else {
             self.script_text.push_str(text);
         }
@@ -735,17 +742,30 @@ if resp.contains("OK") {
                 ctx_print.request_repaint();
             });
 
+            let is_running_engine = is_running.clone();
+            engine.on_progress(move |_| {
+                if is_running_engine.load(Ordering::Relaxed) {
+                    None
+                } else {
+                    Some(rhai::Dynamic::UNIT)
+                }
+            });
+
             let cmd_tx_send = cmd_tx.clone();
             engine.register_fn("serial_send", move |s: &str| {
                 let _ = cmd_tx_send.send(TxCmd::SendData(s.as_bytes().to_vec()));
             });
 
             let rx = script_rx_rx.clone();
+            let is_running_read = is_running.clone();
             engine.register_fn("serial_read_line", move |timeout_ms: i64| -> String {
                 let timeout = Duration::from_millis(u64::try_from(timeout_ms.max(0)).unwrap_or(0));
                 let start = Instant::now();
                 let mut accumulated = String::new();
                 loop {
+                    if !is_running_read.load(Ordering::Relaxed) {
+                        break;
+                    }
                     if start.elapsed() > timeout {
                         break;
                     }
@@ -762,9 +782,15 @@ if resp.contains("OK") {
             });
 
             if let Err(e) = engine.run(&script) {
-                log.lock()
-                    .unwrap()
-                    .push(format!("[ERROR] Script error: {e}"));
+                if !is_running.load(Ordering::Relaxed) {
+                    log.lock()
+                        .unwrap()
+                        .push("[INFO] Script execution stopped by user.".into());
+                } else {
+                    log.lock()
+                        .unwrap()
+                        .push(format!("[ERROR] Script error: {e}"));
+                }
             }
 
             is_running.store(false, Ordering::Relaxed);
@@ -1061,14 +1087,17 @@ impl eframe::App for SerialForgeApp {
                                 );
                             });
 
-                        let trigger_send = ui.button("Send Text").clicked()
-                            || (text_entry.lost_focus()
-                                && ui.input(|i| i.key_pressed(egui::Key::Enter)));
+                        let enter_pressed = text_entry.lost_focus()
+                            && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        let trigger_send = ui.button("Send Text").clicked() || enter_pressed;
 
                         if trigger_send {
                             let text = self.send_text.clone();
                             self.send_string_command(text);
                             self.send_text.clear();
+                            if enter_pressed {
+                                text_entry.request_focus();
+                            }
                         }
                     });
 
@@ -1180,8 +1209,14 @@ impl eframe::App for SerialForgeApp {
                 }
                 ToolTab::Scripting => {
                     ui.horizontal(|ui| {
-                        if ui.button("▶ Run Script").clicked() && self.is_connected {
-                            self.run_script(&ctx);
+                        let is_running = self.script_running.load(Ordering::Relaxed);
+                        if !is_running {
+                            if ui.button("▶ Run Script").clicked() && self.is_connected {
+                                self.run_script(&ctx);
+                            }
+                        } else if ui.button("⏹ Stop Script").clicked() {
+                            self.script_running.store(false, Ordering::Relaxed);
+                            self.log_system("Stopping Rhai script...");
                         }
                         if ui.button("📂 Open Script").clicked()
                             && let Some(path) = FileDialog::new()
@@ -1202,7 +1237,7 @@ impl eframe::App for SerialForgeApp {
                                 }
                             }
                         }
-                        if self.script_running.load(Ordering::Relaxed) {
+                        if is_running {
                             ui.spinner();
                             ui.label("Script executing...");
                         }
