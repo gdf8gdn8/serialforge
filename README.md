@@ -27,7 +27,7 @@ A fast, modern, cross-platform serial terminal inspired by **HTerm** and **Seria
 
 
 * **Embedded Rhai Scripting Engine**:
-* Execute automated testing and device provisioning scripts in a background thread.
+* Execute automated testing and tactical rpg scripts in a background thread.
 * Built-in syntax-highlighted code editor.
 * Exposed API functions: `serial_send(data)`, `serial_read_line(timeout_ms)`, and `print(msg)`.
 
