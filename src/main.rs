@@ -1,16 +1,38 @@
 use chrono::Local;
-use crossbeam_channel::{Receiver, Sender, unbounded};
+use crossbeam_channel::{
+    Receiver,
+    Sender,
+    unbounded,
+};
 use eframe::egui;
 use rfd::FileDialog;
 use rhai::Engine;
-use serialport::{DataBits, FlowControl, Parity, SerialPort, StopBits};
+use serialport::{
+    DataBits,
+    FlowControl,
+    Parity,
+    SerialPort,
+    StopBits,
+};
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::{
+    Read,
+    Write,
+};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{
+    AtomicBool,
+    Ordering,
+};
+use std::sync::{
+    Arc,
+    Mutex,
+};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{
+    Duration,
+    Instant,
+};
 
 // ==========================================
 // 1. Thread Communication & Data Types
@@ -109,7 +131,10 @@ fn scrollable_script_field(
 
 fn highlight_rhai_code(ui: &egui::Ui, code: &str) -> egui::text::LayoutJob {
     use egui::text::LayoutJob;
-    use egui::{Color32, TextFormat};
+    use egui::{
+        Color32,
+        TextFormat,
+    };
 
     let is_dark = ui.visuals().dark_mode;
     let font_id = egui::FontId::monospace(13.0);
@@ -1281,6 +1306,46 @@ impl eframe::App for SerialForgeApp {
 // ==========================================
 // 6. App Entry Point
 // ==========================================
+
+#[cfg(test)]
+mod editor_tests {
+    use super::*;
+
+    #[test]
+    fn full_tactical_rpg_script_has_bounded_scroll_viewport() {
+        let source = include_str!("../scripts/tactical_rpg.rhai");
+        for size in [egui::vec2(320.0, 180.0), egui::vec2(640.0, 400.0)] {
+            let ctx = egui::Context::default();
+            let mut text = source.to_owned();
+            for _frame in 0..3 {
+                let input = egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    ..Default::default()
+                };
+                ctx.run_ui(input, |ui| {
+                    let available = ui.available_size();
+                    let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, _: f32| {
+                        ui.painter()
+                            .layout_job(highlight_rhai_code(ui, text.as_str()))
+                    };
+                    let output = scrollable_script_field(
+                        ui,
+                        "test_script_scroll",
+                        egui::TextEdit::multiline(&mut text)
+                            .layouter(&mut layouter)
+                            .desired_width(available.x),
+                    );
+                    assert!(output.inner_rect.height() <= available.y);
+                    assert!(output.inner_rect.width() <= available.x);
+                    assert!(output.content_size.y > output.inner_rect.height());
+                    assert!(ui.min_rect().height() <= available.y + 1.0);
+                })
+                .drop_without_applying_deltas();
+            }
+            assert_eq!(text, source);
+        }
+    }
+}
 
 fn main() -> eframe::Result<()> {
     let native_options = eframe::NativeOptions {
