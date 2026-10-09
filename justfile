@@ -1,6 +1,6 @@
 # Justfile for serialforge cross-compilation & packaging
 
-image_tag := "serialforge-builder:26.04"
+image_tag := "serialforge-builder:24.04"
 
 # Default action: Build all release artifacts
 default: build-all
