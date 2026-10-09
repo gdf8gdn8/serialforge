@@ -1,38 +1,16 @@
 use chrono::Local;
-use crossbeam_channel::{
-    Receiver,
-    Sender,
-    unbounded,
-};
+use crossbeam_channel::{Receiver, Sender, unbounded};
 use eframe::egui;
 use rfd::FileDialog;
 use rhai::Engine;
-use serialport::{
-    DataBits,
-    FlowControl,
-    Parity,
-    SerialPort,
-    StopBits,
-};
+use serialport::{DataBits, FlowControl, Parity, SerialPort, StopBits};
 use std::fs::File;
-use std::io::{
-    Read,
-    Write,
-};
+use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::sync::atomic::{
-    AtomicBool,
-    Ordering,
-};
-use std::sync::{
-    Arc,
-    Mutex,
-};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{
-    Duration,
-    Instant,
-};
+use std::time::{Duration, Instant};
 
 // ==========================================
 // 1. Thread Communication & Data Types
@@ -117,12 +95,21 @@ pub enum ToolTab {
 // 2. Syntax Colorizer for Rhai Scripting
 // ==========================================
 
+fn scrollable_script_field(
+    ui: &mut egui::Ui,
+    id: &str,
+    editor: egui::TextEdit<'_>,
+) -> egui::containers::scroll_area::ScrollAreaOutput<egui::Response> {
+    egui::ScrollArea::both()
+        .id_salt(id)
+        .max_height(ui.available_height())
+        .auto_shrink([false; 2])
+        .show(ui, |ui| ui.add(editor))
+}
+
 fn highlight_rhai_code(ui: &egui::Ui, code: &str) -> egui::text::LayoutJob {
     use egui::text::LayoutJob;
-    use egui::{
-        Color32,
-        TextFormat,
-    };
+    use egui::{Color32, TextFormat};
 
     let is_dark = ui.visuals().dark_mode;
     let font_id = egui::FontId::monospace(13.0);
@@ -597,6 +584,31 @@ if resp.contains("OK") {
         self.log_system(&format!("TX Command: \"{text}\""));
     }
 
+    fn insert_script_text(&mut self, ctx: &egui::Context, editor_id: egui::Id, text: &str) {
+        let byte_offset = |value: &str, char_index: usize| {
+            value
+                .char_indices()
+                .nth(char_index)
+                .map_or(value.len(), |(byte_index, _)| byte_index)
+        };
+
+        if let Some(state) = egui::TextEdit::load_state(ctx, editor_id)
+            && let Some(range) = state.cursor.char_range()
+        {
+            let start = byte_offset(
+                &self.script_text,
+                range.primary.index.0.min(range.secondary.index.0),
+            );
+            let end = byte_offset(
+                &self.script_text,
+                range.primary.index.0.max(range.secondary.index.0),
+            );
+            self.script_text.replace_range(start..end, text);
+        } else {
+            self.script_text.push_str(text);
+        }
+    }
+
     fn run_script(&mut self) {
         if self.script_running.load(Ordering::Relaxed) {
             return;
@@ -636,7 +648,7 @@ if resp.contains("OK") {
                     if let Ok(bytes) = rx.try_recv() {
                         let text = String::from_utf8_lossy(&bytes);
                         accumulated.push_str(&text);
-                        if accumulated.contains('\n') {
+                        if accumulated.contains('\r') || accumulated.contains('\n') {
                             break;
                         }
                     }
@@ -826,7 +838,12 @@ impl eframe::App for SerialForgeApp {
         });
 
         // 3. BOTTOM TABBED TOOLBAR: Send & Presets, File Transfer, Scripting, Log Console
-        egui::Panel::bottom("tools_panel").show(ui, |ui| {
+        let tools_panel = egui::Panel::bottom("serialforge_tools_panel")
+            .default_size(500.0)
+            .min_size(280.0)
+            .max_size(680.0)
+            .resizable(true);
+        tools_panel.show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.selectable_value(
                     &mut self.active_tab,
@@ -1061,6 +1078,25 @@ impl eframe::App for SerialForgeApp {
                         if ui.button("▶ Run Script").clicked() && self.is_connected {
                             self.run_script();
                         }
+                        if ui.button("📂 Open Script").clicked()
+                            && let Some(path) = FileDialog::new()
+                                .add_filter("Rhai scripts", &["rhai"])
+                                .pick_file()
+                        {
+                            match std::fs::read_to_string(&path) {
+                                Ok(script) => {
+                                    self.script_text = script;
+                                    self.status_msg = format!(
+                                        "Loaded script: {}",
+                                        path.file_name().unwrap_or_default().to_string_lossy()
+                                    );
+                                }
+                                Err(error) => {
+                                    self.status_msg = format!("Script load failed: {error}");
+                                    self.log_system(&self.status_msg.clone());
+                                }
+                            }
+                        }
                         if self.script_running.load(Ordering::Relaxed) {
                             ui.spinner();
                             ui.label("Script executing...");
@@ -1068,7 +1104,20 @@ impl eframe::App for SerialForgeApp {
                     });
 
                     ui.columns(2, |cols| {
-                        cols[0].label("Rhai Script Editor:");
+                        let ctx = cols[0].ctx().clone();
+                        let editor_id = egui::Id::new("rhai_script_editor");
+                        let paste_requested = cols[0]
+                            .horizontal(|ui| {
+                                let paste_requested = ui.button("📋 Paste").clicked();
+                                ui.label("Rhai Script Editor:");
+                                paste_requested
+                            })
+                            .inner;
+                        let editor_has_focus = ctx.memory(|memory| memory.has_focus(editor_id));
+                        let key_paste_requested = editor_has_focus
+                            && ctx.input(|input| {
+                                input.key_pressed(egui::Key::V) && input.modifiers.command
+                            });
 
                         let layouter =
                             &mut |ui: &egui::Ui,
@@ -1078,21 +1127,62 @@ impl eframe::App for SerialForgeApp {
                                     .layout_job(highlight_rhai_code(ui, string.as_str()))
                             };
 
-                        cols[0].add(
+                        let mut paste_text: Option<String> = if editor_has_focus {
+                            ctx.input(|input| {
+                                input.events.iter().find_map(|event| match event {
+                                    egui::Event::Paste(text) => Some(text.clone()),
+                                    _ => None,
+                                })
+                            })
+                        } else {
+                            None
+                        };
+
+                        if paste_text.is_none() && (paste_requested || key_paste_requested) {
+                            match arboard::Clipboard::new()
+                                .and_then(|mut clipboard| clipboard.get_text())
+                            {
+                                Ok(text) => paste_text = Some(text),
+                                Err(error) => {
+                                    self.log_system(&format!("Clipboard paste failed: {error}"))
+                                }
+                            }
+                        }
+
+                        if let Some(text) = paste_text {
+                            ctx.input_mut(|input| {
+                                input
+                                    .events
+                                    .retain(|event| !matches!(event, egui::Event::Paste(_)));
+                            });
+                            self.insert_script_text(&ctx, editor_id, &text);
+                        }
+
+                        let editor_width = cols[0].available_width();
+                        let editor_response = scrollable_script_field(
+                            &mut cols[0],
+                            "rhai_editor_scroll",
                             egui::TextEdit::multiline(&mut self.script_text)
+                                .id(editor_id)
                                 .font(egui::TextStyle::Monospace)
                                 .layouter(layouter)
-                                .desired_rows(6)
-                                .desired_width(f32::INFINITY),
-                        );
+                                .desired_width(editor_width),
+                        )
+                        .inner;
+
+                        if paste_requested {
+                            editor_response.request_focus();
+                        }
 
                         cols[1].label("Script Log:");
                         let mut logs = self.script_log.lock().unwrap().join("\n");
-                        cols[1].add(
+                        let log_width = cols[1].available_width();
+                        scrollable_script_field(
+                            &mut cols[1],
+                            "rhai_log_scroll",
                             egui::TextEdit::multiline(&mut logs)
                                 .font(egui::TextStyle::Monospace)
-                                .desired_rows(6)
-                                .desired_width(f32::INFINITY),
+                                .desired_width(log_width),
                         );
                     });
                 }

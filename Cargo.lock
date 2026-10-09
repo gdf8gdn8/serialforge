@@ -2914,6 +2914,7 @@ dependencies = [
 name = "serialforge"
 version = "0.1.0"
 dependencies = [
+ "arboard",
  "chrono",
  "crossbeam-channel",
  "eframe",

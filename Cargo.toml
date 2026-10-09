@@ -6,6 +6,7 @@ description = "serialforge is a high-performance, cross-platform serial terminal
 [dependencies]
 eframe = "0.36"
 egui = "0.36"
+arboard = "3.6.1"     # Native clipboard access for the script editor
 serialport = "4"
 crossbeam-channel = "0.5"
 rfd = "0.17"         # Native file open dialogs

@@ -122,7 +122,7 @@ cargo run --release
 | Function | Return Type | Description |
 | --- | --- | --- |
 | `serial_send("text")` | `()` | Sends the string payload to the connected serial port. |
-| `serial_read_line(timeout_ms)` | `String` | Blocks up to `timeout_ms` waiting for a line ending in `\n`. |
+| `serial_read_line(timeout_ms)` | `String` | Blocks up to `timeout_ms` waiting for a line ending in `\r` or `\n`. |
 | `print("message")` | `()` | Prints output to the Script Execution Log panel. |
 
 ### Example Script
