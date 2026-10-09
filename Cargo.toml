@@ -3,6 +3,11 @@ name = "serialforge"
 version = "0.1.0"
 edition = "2024"
 description = "serialforge is a high-performance, cross-platform serial terminal written in Rust, inspired by HTerm and SerialGUI-rs."
+
+[[bin]]
+name = "serialforge"
+path = "src/main.rs"
+
 [dependencies]
 eframe = "0.36"
 egui = "0.36"
