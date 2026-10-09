@@ -7,7 +7,7 @@ default: build-all
 
 # Build the Ubuntu 26.04 Docker builder image
 docker-build:
-    docker buildx build -t {{image_tag}} .
+    docker buildx build --load --squash -t {{image_tag}} .
 
 # Cross-compile native Linux binary
 build-linux: docker-build
