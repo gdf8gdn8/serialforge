@@ -7,9 +7,16 @@ description = "serialforge is a high-performance, cross-platform serial terminal
 [[bin]]
 name = "serialforge"
 path = "src/main.rs"
+# Windows build (uses native Windows APIs automatically)
+[target.'cfg(target_os = "windows")'.dependencies]
+eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow", "persistence"] }
+
+# Linux build (requires explicit display servers since defaults are off)
+[target.'cfg(target_os = "linux")'.dependencies]
+eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow", "persistence", "x11", "wayland"] }
 
 [dependencies]
-eframe = { version = "0.37", features = ["persistence"] }
+#eframe = { version = "0.37", default-features = false, features = ["persistence","glow",  "default_fonts"] }
 egui = "0.37"
 serde = { version = "1.0", features = ["derive"] }
 hex = "0.4"
@@ -34,6 +41,13 @@ panic = 'unwind'
 incremental = false
 overflow-checks = true
 strip = true
+
+[profile.size]
+inherits = "release"
+lto = true
+panic = "abort"
+offset-debug = false
+
 
 [package.metadata.deb]
 maintainer = "Uwe Strempel <u.strempel@gmail.com>"
