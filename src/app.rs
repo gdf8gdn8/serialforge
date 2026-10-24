@@ -118,6 +118,8 @@ pub struct SerialForgeApp {
 impl SerialForgeApp {
     #[must_use]
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        Self::setup_custom_fonts(&cc.egui_ctx);
+
         let (cmd_tx, cmd_rx) = unbounded();
         let (evt_tx, evt_rx) = unbounded();
         let (script_rx_tx, script_rx_rx) = unbounded();
@@ -239,6 +241,64 @@ print("Automation sequence completed.");
 
         app.log_system("Application initialized.");
         app
+    }
+
+    pub fn setup_custom_fonts(ctx: &egui::Context) {
+        let mut fonts = egui::FontDefinitions::default();
+
+        // 1. Install Inter fonts
+        fonts.font_data.insert(
+            "Inter-Regular".to_owned(),
+            Arc::new(egui::FontData::from_static(include_bytes!(
+                "../assets/fonts/Inter-Regular.ttf"
+            ))),
+        );
+        fonts.font_data.insert(
+            "Inter-Medium".to_owned(),
+            Arc::new(egui::FontData::from_static(include_bytes!(
+                "../assets/fonts/Inter-Medium.ttf"
+            ))),
+        );
+        fonts.font_data.insert(
+            "Inter-SemiBold".to_owned(),
+            Arc::new(egui::FontData::from_static(include_bytes!(
+                "../assets/fonts/Inter-SemiBold.ttf"
+            ))),
+        );
+
+        // 2. Install JetBrainsMono font
+        fonts.font_data.insert(
+            "JetBrainsMono-Regular".to_owned(),
+            Arc::new(egui::FontData::from_static(include_bytes!(
+                "../assets/fonts/JetBrainsMono-Regular.ttf"
+            ))),
+        );
+
+        // 3. Configure Proportional (Default UI) Font Family
+        fonts
+            .families
+            .entry(egui::FontFamily::Proportional)
+            .or_default()
+            .insert(0, "Inter-Regular".to_owned());
+        fonts
+            .families
+            .entry(egui::FontFamily::Proportional)
+            .or_default()
+            .insert(1, "Inter-Medium".to_owned());
+        fonts
+            .families
+            .entry(egui::FontFamily::Proportional)
+            .or_default()
+            .insert(2, "Inter-SemiBold".to_owned());
+
+        // 4. Configure Monospace (Terminal, Code, Logs) Font Family
+        fonts
+            .families
+            .entry(egui::FontFamily::Monospace)
+            .or_default()
+            .insert(0, "JetBrainsMono-Regular".to_owned());
+
+        ctx.set_fonts(fonts);
     }
 
     pub fn log_system(&mut self, msg: &str) {
