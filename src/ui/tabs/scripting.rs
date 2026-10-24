@@ -47,7 +47,7 @@ pub fn render_scripting_tab(app: &mut SerialForgeApp, ui: &mut egui::Ui) {
 
     ui.columns(2, |cols| {
         let ctx = cols[0].ctx().clone();
-        let editor_id = egui::Id::new("rhai_script_editor");
+        let editor_id = egui::Id::unique("rhai_script_editor");
         let paste_requested = cols[0]
             .horizontal(|ui| {
                 let paste_requested = ui.button("📋 Paste").clicked();
