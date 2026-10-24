@@ -71,9 +71,12 @@ pub fn render_presets_tab(app: &mut SerialForgeApp, ui: &mut egui::Ui) {
                 ui.selectable_value(&mut app.line_ending, LineEnding::Etx, "ETX (0x03)");
             });
 
+        ui.checkbox(&mut app.send_as_hex, "HEX")
+            .on_hover_text("Send as raw hexadecimal bytes (e.g., 01 03 00 00 00 0A C5 CD)");
+
         let enter_pressed =
             text_entry.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-        let trigger_send = ui.button("Send Text").clicked() || enter_pressed;
+        let trigger_send = ui.button("Send").clicked() || enter_pressed;
 
         if trigger_send {
             let text = app.send_text.clone();
@@ -82,6 +85,22 @@ pub fn render_presets_tab(app: &mut SerialForgeApp, ui: &mut egui::Ui) {
             if enter_pressed {
                 text_entry.request_focus();
             }
+        }
+    });
+
+    // Periodic / Repeat Transmit Bar
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut app.repeat_send_enabled, "🔁 Repeat Every:");
+        ui.add(
+            egui::DragValue::new(&mut app.repeat_send_interval_ms)
+                .range(20..=60_000)
+                .suffix(" ms"),
+        );
+        if app.repeat_send_enabled && !app.is_connected {
+            ui.label(
+                egui::RichText::new("(Connect port to begin repeating)")
+                    .color(egui::Color32::from_rgb(200, 140, 40)),
+            );
         }
     });
 

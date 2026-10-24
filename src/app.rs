@@ -84,9 +84,15 @@ pub struct SerialForgeApp {
 
     // Sending & History
     pub send_text: String,
+    pub send_as_hex: bool,
     pub line_ending: LineEnding,
     pub cmd_history: Vec<String>,
     pub cmd_history_idx: Option<usize>,
+
+    // Periodic / Repeat Transmit
+    pub repeat_send_enabled: bool,
+    pub repeat_send_interval_ms: u64,
+    pub last_repeat_send: Option<Instant>,
 
     // Preconfigured Commands
     pub preconfig_commands: Vec<PreconfigCommand>,
@@ -198,9 +204,13 @@ impl SerialForgeApp {
             log_file_bytes: 0,
             active_tab: config.active_tab,
             send_text: String::new(),
+            send_as_hex: false,
             line_ending: config.line_ending,
             cmd_history: Vec::new(),
             cmd_history_idx: None,
+            repeat_send_enabled: false,
+            repeat_send_interval_ms: 1000,
+            last_repeat_send: None,
             preconfig_commands: config.preconfig_commands,
             new_preconfig_name: String::new(),
             new_preconfig_cmd: String::new(),
@@ -346,8 +356,21 @@ print("Automation sequence completed.");
         }
         self.cmd_history_idx = None;
 
-        let mut payload = text.into_bytes();
-        payload.extend_from_slice(self.line_ending.as_bytes());
+        let payload = if self.send_as_hex {
+            let cleaned: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+            match hex::decode(&cleaned) {
+                Ok(bytes) => bytes,
+                Err(e) => {
+                    self.log_system(&format!("HEX decode error: {e}. Payload not sent."));
+                    return;
+                }
+            }
+        } else {
+            let mut p = text.into_bytes();
+            p.extend_from_slice(self.line_ending.as_bytes());
+            p
+        };
+
         self.tx_bytes += payload.len();
         let _ = self.cmd_tx.send(TxCmd::SendData(payload));
     }
@@ -429,6 +452,40 @@ print("Automation sequence completed.");
                 let _ = cmd_tx_send.send(TxCmd::SendData(s.as_bytes().to_vec()));
             });
 
+            let cmd_tx_hex = cmd_tx.clone();
+            engine.register_fn("serial_write_hex", move |hex_str: &str| {
+                let cleaned: String = hex_str.chars().filter(|c| !c.is_whitespace()).collect();
+                if let Ok(bytes) = hex::decode(&cleaned) {
+                    let _ = cmd_tx_hex.send(TxCmd::SendData(bytes));
+                }
+            });
+
+            // Write raw array of integers/bytes
+            let cmd_tx_bytes = cmd_tx.clone();
+            engine.register_fn("serial_write_bytes", move |bytes_arr: rhai::Array| {
+                let mut data = Vec::with_capacity(bytes_arr.len());
+                for item in bytes_arr {
+                    if let Ok(val) = item.as_int() {
+                        data.push(val as u8);
+                    }
+                }
+                let _ = cmd_tx_bytes.send(TxCmd::SendData(data));
+            });
+
+            // File export / append report helper
+            engine.register_fn(
+                "export_report",
+                move |filename: &str, content: &str| -> bool {
+                    use std::fs::OpenOptions;
+                    OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(filename)
+                        .and_then(|mut f| f.write_all(content.as_bytes()))
+                        .is_ok()
+                },
+            );
+
             let rx = script_rx_rx.clone();
             let is_running_read = is_running.clone();
             engine.register_fn("serial_read_line", move |timeout_ms: i64| -> String {
@@ -452,6 +509,34 @@ print("Automation sequence completed.");
                     thread::sleep(Duration::from_millis(10));
                 }
                 accumulated
+            });
+
+            let rx_wait = script_rx_rx.clone();
+            let is_running_wait = is_running.clone();
+            engine.register_fn(
+                "serial_wait_for",
+                move |pattern: &str, timeout_ms: i64| -> bool {
+                    let timeout =
+                        Duration::from_millis(u64::try_from(timeout_ms.max(0)).unwrap_or(0));
+                    let start = Instant::now();
+                    let mut accumulated = String::new();
+                    while is_running_wait.load(Ordering::Relaxed) && start.elapsed() <= timeout {
+                        if let Ok(bytes) = rx_wait.try_recv() {
+                            let text = String::from_utf8_lossy(&bytes);
+                            accumulated.push_str(&text);
+                            if accumulated.contains(pattern) {
+                                return true;
+                            }
+                        }
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    false
+                },
+            );
+
+            engine.register_fn("sleep_ms", move |ms: i64| {
+                let duration = Duration::from_millis(u64::try_from(ms.max(0)).unwrap_or(0));
+                thread::sleep(duration);
             });
 
             if let Err(e) = engine.run(&script) {
@@ -562,6 +647,22 @@ impl eframe::App for SerialForgeApp {
 
         self.handle_events();
 
+        // Handle periodic transmit if enabled and connected
+        if self.repeat_send_enabled && self.is_connected && !self.send_text.is_empty() {
+            let interval = Duration::from_millis(self.repeat_send_interval_ms.max(10));
+            let now = Instant::now();
+            let should_send = match self.last_repeat_send {
+                None => true,
+                Some(last) => now.duration_since(last) >= interval,
+            };
+            if should_send {
+                self.last_repeat_send = Some(now);
+                let text = self.send_text.clone();
+                self.send_string_command(text);
+            }
+            ctx.request_repaint_after(interval);
+        }
+
         // 1. TOP PANEL: Hardware Setup & Theme Switcher
         egui::Panel::top("top_panel").show(ui, |ui| {
             ui::toolbar::render_toolbar(self, ui);
@@ -661,9 +762,13 @@ mod tests {
             log_file_bytes: 0,
             active_tab: ToolTab::TransmitPresets,
             send_text: String::new(),
+            send_as_hex: false,
             line_ending: LineEnding::Crlf,
             cmd_history: Vec::new(),
             cmd_history_idx: None,
+            repeat_send_enabled: false,
+            repeat_send_interval_ms: 1000,
+            last_repeat_send: None,
             preconfig_commands: Vec::new(),
             new_preconfig_name: String::new(),
             new_preconfig_cmd: String::new(),
@@ -713,6 +818,14 @@ mod tests {
         assert_eq!(app.cmd_history, vec!["AT".to_string()]);
         app.send_string_command("ATI".into());
         assert_eq!(app.cmd_history, vec!["AT".to_string(), "ATI".to_string()]);
+    }
+
+    #[test]
+    fn test_send_as_hex() {
+        let mut app = create_test_app();
+        app.send_as_hex = true;
+        app.send_string_command("01 03 00 00 00 02 C4 0B".into());
+        assert_eq!(app.tx_bytes, 8);
     }
 
     #[test]

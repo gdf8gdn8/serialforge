@@ -12,6 +12,7 @@ path = "src/main.rs"
 eframe = { version = "0.36", features = ["persistence"] }
 egui = "0.36"
 serde = { version = "1.0", features = ["derive"] }
+hex = "0.4"
 arboard = "3.6.1"     # Native clipboard access for the script editor
 serialport = "4"
 crossbeam-channel = "0.5"
