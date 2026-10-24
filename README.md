@@ -151,6 +151,12 @@ if response.contains("OK") {
 
 ---
 
+## 🗺️ Roadmap & Planned Features
+
+See [TODO.md](TODO.md) for the active roadmap, feature suggestions, and planned milestones (session logging, hotplug auto-reconnect, hex input mode, line timestamps, and telemetry plotting).
+
+---
+
 ## License & AI Provenance
 
 This project is licensed under the [MIT License](LICENSE).
