@@ -26,7 +26,6 @@ crossbeam-channel = "0.5"
 rfd = "0.17"         # Native file open dialogs
 rhai = "1.26"        # Embedded scripting engine
 chrono = "0.4"      # Precise UI timestamps
-eframe = "0.37"
 
 [build-dependencies]
 winres = "0.1"
