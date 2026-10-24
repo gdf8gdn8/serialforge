@@ -28,6 +28,8 @@ use serialport::{
     Parity,
     StopBits,
 };
+use std::fs::File;
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{
     AtomicBool,
@@ -52,6 +54,10 @@ pub struct SerialForgeApp {
     pub parity: Parity,
     pub flow_control: FlowControl,
 
+    pub baud_input: String,
+    pub auto_reconnect: bool,
+    pub reconnect_timer: Option<Instant>,
+
     pub rts: bool,
     pub dtr: bool,
     pub is_connected: bool,
@@ -67,6 +73,11 @@ pub struct SerialForgeApp {
     pub auto_scroll: bool,
     pub rx_bytes: usize,
     pub tx_bytes: usize,
+
+    // Session Logging (Log to File)
+    pub log_file: Option<File>,
+    pub log_file_path: Option<PathBuf>,
+    pub log_file_bytes: usize,
 
     // Tools Tab Selection
     pub active_tab: ToolTab,
@@ -166,6 +177,9 @@ impl SerialForgeApp {
             stop_bits,
             parity,
             flow_control,
+            baud_input: config.baud_rate.to_string(),
+            auto_reconnect: config.auto_reconnect,
+            reconnect_timer: None,
             rts: false,
             dtr: false,
             is_connected: false,
@@ -179,6 +193,9 @@ impl SerialForgeApp {
             auto_scroll: config.auto_scroll,
             rx_bytes: 0,
             tx_bytes: 0,
+            log_file: None,
+            log_file_path: None,
+            log_file_bytes: 0,
             active_tab: config.active_tab,
             send_text: String::new(),
             line_ending: config.line_ending,
@@ -240,6 +257,7 @@ print("Automation sequence completed.");
             match evt {
                 RxEvent::Connected(port) => {
                     self.is_connected = true;
+                    self.reconnect_timer = None;
                     self.status_msg = format!("Connected to {port}");
                     self.log_system(&format!("Successfully connected to {port}"));
                 }
@@ -247,9 +265,19 @@ print("Automation sequence completed.");
                     self.is_connected = false;
                     self.status_msg = "Disconnected".to_string();
                     self.log_system("Port disconnected.");
+                    if self.auto_reconnect && !self.selected_port.is_empty() {
+                        self.reconnect_timer = Some(Instant::now() + Duration::from_millis(1500));
+                        self.log_system("Auto-reconnect scheduled in 1.5s...");
+                    }
                 }
                 RxEvent::DataReceived(bytes) => {
                     self.rx_bytes += bytes.len();
+                    if let Some(ref mut f) = self.log_file
+                        && f.write_all(&bytes).is_ok()
+                    {
+                        self.log_file_bytes += bytes.len();
+                        let _ = f.flush();
+                    }
                     self.rx_buffer.extend(bytes);
                     if self.rx_buffer.len() > MAX_RX_BUFFER_SIZE {
                         let excess = self.rx_buffer.len() - MAX_RX_BUFFER_SIZE;
@@ -270,6 +298,39 @@ print("Automation sequence completed.");
                     self.file_progress = None;
                     self.status_msg = format!("Error: {e}");
                     self.log_system(&format!("ERROR: {e}"));
+                    if self.auto_reconnect
+                        && !self.is_connected
+                        && !self.selected_port.is_empty()
+                        && self.reconnect_timer.is_none()
+                    {
+                        self.reconnect_timer = Some(Instant::now() + Duration::from_millis(2000));
+                    }
+                }
+            }
+        }
+
+        if let Some(deadline) = self.reconnect_timer
+            && Instant::now() >= deadline
+        {
+            self.reconnect_timer = None;
+            if !self.is_connected && !self.selected_port.is_empty() {
+                // Check if port is present in available ports or refresh
+                if let Ok(ports) = serialport::available_ports() {
+                    self.available_ports = ports.into_iter().map(|p| p.port_name).collect();
+                }
+                if self.available_ports.contains(&self.selected_port) {
+                    self.log_system(&format!("Auto-reconnecting to {}...", self.selected_port));
+                    let _ = self.cmd_tx.send(TxCmd::Connect {
+                        port_name: self.selected_port.clone(),
+                        baud_rate: self.baud_rate,
+                        data_bits: self.data_bits,
+                        stop_bits: self.stop_bits,
+                        parity: self.parity,
+                        flow_control: self.flow_control,
+                    });
+                } else {
+                    // Retry again in 1.5s
+                    self.reconnect_timer = Some(Instant::now() + Duration::from_millis(1500));
                 }
             }
         }
@@ -477,6 +538,7 @@ impl eframe::App for SerialForgeApp {
             },
             parity: format!("{}", self.parity),
             flow_control: format!("{}", self.flow_control),
+            auto_reconnect: self.auto_reconnect,
             dark_mode: self.dark_mode,
             view_mode: self.view_mode,
             auto_scroll: self.auto_scroll,
@@ -578,6 +640,9 @@ mod tests {
             stop_bits: StopBits::One,
             parity: Parity::None,
             flow_control: FlowControl::None,
+            baud_input: "115200".into(),
+            auto_reconnect: false,
+            reconnect_timer: None,
             rts: false,
             dtr: false,
             is_connected: true,
@@ -591,6 +656,9 @@ mod tests {
             auto_scroll: true,
             rx_bytes: 0,
             tx_bytes: 0,
+            log_file: None,
+            log_file_path: None,
+            log_file_bytes: 0,
             active_tab: ToolTab::TransmitPresets,
             send_text: String::new(),
             line_ending: LineEnding::Crlf,

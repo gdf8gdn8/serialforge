@@ -7,12 +7,12 @@ This document outlines planned improvements, feature suggestions, and architectu
 ## 🎯 Upcoming Feature Roadmap
 
 ### 1. Terminal Capture & Session Logging
-- [ ] **Log-to-File (Stream Capture)**: Live streaming of raw bytes or formatted text to a user-selected timestamped file (e.g. `session_YYYY-MM-DD_HH-MM.log`).
-- [ ] **Export Console Buffer**: Button to quickly dump the currently buffered terminal view (ASCII, HEX, or Mixed) to disk.
+- [x] **Log-to-File (Stream Capture)**: Live streaming of raw bytes or formatted text to a user-selected timestamped file (e.g. `session_YYYY-MM-DD_HH-MM.log`).
+- [x] **Export Console Buffer**: Button to quickly dump the currently buffered terminal view (ASCII, HEX, or Mixed) to disk.
 
 ### 2. Connection Resilience & Ergonomics
-- [ ] **USB Hotplug & Auto-Reconnect**: Detect temporary device resets/disconnects (e.g., during firmware flashing) and automatically re-open the serial port after a configurable interval.
-- [ ] **Custom Baud Rate Input**: Allow manual entry of arbitrary/non-standard baud rates in addition to the dropdown presets.
+- [x] **USB Hotplug & Auto-Reconnect**: Detect temporary device resets/disconnects (e.g., during firmware flashing) and automatically re-open the serial port after a configurable interval.
+- [x] **Custom Baud Rate Input**: Allow manual entry of arbitrary/non-standard baud rates in addition to the dropdown presets.
 
 ### 3. Data Transmission Enhancements
 - [ ] **HEX / Binary Send Mode**: Option in the Transmit bar to send raw byte sequences (e.g. `01 03 00 00 00 0A C5 CD` or Modbus RTU frames) directly without UTF-8 encoding.

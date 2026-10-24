@@ -53,9 +53,30 @@ pub fn render_toolbar(app: &mut SerialForgeApp, ui: &mut egui::Ui) {
                     for b in [
                         9600, 19200, 38400, 57600, 115_200, 230_400, 460_800, 921_600,
                     ] {
-                        ui.selectable_value(&mut app.baud_rate, b, b.to_string());
+                        if ui
+                            .selectable_value(&mut app.baud_rate, b, b.to_string())
+                            .clicked()
+                        {
+                            app.baud_input = b.to_string();
+                        }
                     }
                 });
+
+            // Custom Baud Rate Input
+            let baud_edit = ui.add(
+                egui::TextEdit::singleline(&mut app.baud_input)
+                    .desired_width(65.0)
+                    .hint_text("custom"),
+            );
+            if baud_edit.lost_focus() {
+                if let Ok(parsed) = app.baud_input.parse::<u32>() {
+                    if parsed > 0 {
+                        app.baud_rate = parsed;
+                    }
+                } else {
+                    app.baud_input = app.baud_rate.to_string();
+                }
+            }
 
             ui.label("Data:");
             egui::ComboBox::from_id_salt("data_combo")
@@ -114,7 +135,7 @@ pub fn render_toolbar(app: &mut SerialForgeApp, ui: &mut egui::Ui) {
         });
         ui.separator();
 
-        // GROUP 4: Hardware Control Signals
+        // GROUP 4: Hardware Control Signals & Auto-reconnect
         ui.horizontal(|ui| {
             if ui.checkbox(&mut app.rts, "RTS").changed() && app.is_connected {
                 let _ = app.cmd_tx.send(TxCmd::SetRts(app.rts));
@@ -122,6 +143,9 @@ pub fn render_toolbar(app: &mut SerialForgeApp, ui: &mut egui::Ui) {
             if ui.checkbox(&mut app.dtr, "DTR").changed() && app.is_connected {
                 let _ = app.cmd_tx.send(TxCmd::SetDtr(app.dtr));
             }
+            ui.separator();
+            ui.checkbox(&mut app.auto_reconnect, "Auto-Reconnect")
+                .on_hover_text("Automatically reconnect if connection drops or device restarts");
         });
 
         // GROUP 5: Right-Aligned Theme Toggle
