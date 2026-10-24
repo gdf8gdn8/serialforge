@@ -1,6 +1,8 @@
 mod app;
+mod config;
 mod highlighter;
 mod types;
+mod ui;
 mod worker;
 fn main() -> eframe::Result<()> {
     let native_options = eframe::NativeOptions {

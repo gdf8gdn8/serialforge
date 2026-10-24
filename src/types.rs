@@ -1,3 +1,7 @@
+use serde::{
+    Deserialize,
+    Serialize,
+};
 use serialport::{
     DataBits,
     FlowControl,
@@ -37,19 +41,21 @@ pub enum RxEvent {
     Error(String),
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, Default)]
 pub enum ViewMode {
+    #[default]
     Ascii,
     Hex,
     Mixed,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, Default)]
 pub enum LineEnding {
     None,
     Null,
     CR,
     LF,
+    #[default]
     Crlf,
     Etx,
 }
@@ -68,14 +74,15 @@ impl LineEnding {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PreconfigCommand {
     pub name: String,
     pub cmd: String,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, Default)]
 pub enum ToolTab {
+    #[default]
     TransmitPresets,
     BinaryFile,
     Scripting,

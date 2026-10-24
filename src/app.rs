@@ -1,6 +1,8 @@
-use crate::highlighter::{
-    highlight_rhai_code,
-    scrollable_script_field,
+use crate::config::{
+    AppConfig,
+    MAX_RX_BUFFER_SIZE,
+    MAX_SCRIPT_LOG_ENTRIES,
+    MAX_SYSTEM_LOG_ENTRIES,
 };
 use crate::types::{
     LineEnding,
@@ -10,6 +12,7 @@ use crate::types::{
     TxCmd,
     ViewMode,
 };
+use crate::ui;
 use crate::worker::spawn_serial_worker;
 use chrono::Local;
 use crossbeam_channel::{
@@ -18,7 +21,6 @@ use crossbeam_channel::{
     unbounded,
 };
 use eframe::egui;
-use rfd::FileDialog;
 use rhai::Engine;
 use serialport::{
     DataBits,
@@ -42,59 +44,58 @@ use std::time::{
 };
 
 pub struct SerialForgeApp {
-    available_ports: Vec<String>,
-    selected_port: String,
-    baud_rate: u32,
-    data_bits: DataBits,
-    stop_bits: StopBits,
-    parity: Parity,
-    flow_control: FlowControl,
+    pub available_ports: Vec<String>,
+    pub selected_port: String,
+    pub baud_rate: u32,
+    pub data_bits: DataBits,
+    pub stop_bits: StopBits,
+    pub parity: Parity,
+    pub flow_control: FlowControl,
 
-    rts: bool,
-    dtr: bool,
-    is_connected: bool,
-    dark_mode: bool,
+    pub rts: bool,
+    pub dtr: bool,
+    pub is_connected: bool,
+    pub dark_mode: bool,
 
-    cmd_tx: Sender<TxCmd>,
-    evt_rx: Receiver<RxEvent>,
-    script_rx_rx: Receiver<Vec<u8>>,
+    pub cmd_tx: Sender<TxCmd>,
+    pub evt_rx: Receiver<RxEvent>,
+    pub script_rx_rx: Receiver<Vec<u8>>,
 
-    rx_buffer: Vec<u8>,
-    view_mode: ViewMode,
-    cached_formatted_text: Option<String>,
-    auto_scroll: bool,
-    //show_timestamps: bool,
-    rx_bytes: usize,
-    tx_bytes: usize,
+    pub rx_buffer: Vec<u8>,
+    pub view_mode: ViewMode,
+    pub cached_formatted_text: Option<String>,
+    pub auto_scroll: bool,
+    pub rx_bytes: usize,
+    pub tx_bytes: usize,
 
     // Tools Tab Selection
-    active_tab: ToolTab,
+    pub active_tab: ToolTab,
 
     // Sending & History
-    send_text: String,
-    line_ending: LineEnding,
-    cmd_history: Vec<String>,
-    cmd_history_idx: Option<usize>,
+    pub send_text: String,
+    pub line_ending: LineEnding,
+    pub cmd_history: Vec<String>,
+    pub cmd_history_idx: Option<usize>,
 
     // Preconfigured Commands
-    preconfig_commands: Vec<PreconfigCommand>,
-    new_preconfig_name: String,
-    new_preconfig_cmd: String,
+    pub preconfig_commands: Vec<PreconfigCommand>,
+    pub new_preconfig_name: String,
+    pub new_preconfig_cmd: String,
 
     // File Transfer
-    file_path: Option<PathBuf>,
-    chunk_size: usize,
-    chunk_delay_ms: u64,
-    file_progress: Option<(usize, usize)>,
+    pub file_path: Option<PathBuf>,
+    pub chunk_size: usize,
+    pub chunk_delay_ms: u64,
+    pub file_progress: Option<(usize, usize)>,
 
     // Scripting Engine
-    script_text: String,
-    script_running: Arc<AtomicBool>,
-    script_log: Arc<Mutex<Vec<String>>>,
+    pub script_text: String,
+    pub script_running: Arc<AtomicBool>,
+    pub script_log: Arc<Mutex<Vec<String>>>,
 
     // System Logs
-    system_log: Vec<String>,
-    status_msg: String,
+    pub system_log: Vec<String>,
+    pub status_msg: String,
 }
 
 impl SerialForgeApp {
@@ -120,73 +121,89 @@ impl SerialForgeApp {
             .map(|p| p.port_name)
             .collect::<Vec<_>>();
 
-        let default_port = ports.first().cloned().unwrap_or_default();
+        // Restore persisted state if available
+        let config: AppConfig = cc
+            .storage
+            .and_then(|s| eframe::get_value(s, eframe::APP_KEY))
+            .unwrap_or_default();
+
+        let selected_port =
+            if !config.selected_port.is_empty() && ports.contains(&config.selected_port) {
+                config.selected_port
+            } else {
+                ports.first().cloned().unwrap_or_default()
+            };
+
+        let data_bits = match config.data_bits {
+            5 => DataBits::Five,
+            6 => DataBits::Six,
+            7 => DataBits::Seven,
+            _ => DataBits::Eight,
+        };
+
+        let stop_bits = match config.stop_bits {
+            2 => StopBits::Two,
+            _ => StopBits::One,
+        };
+
+        let parity = match config.parity.as_str() {
+            "Odd" => Parity::Odd,
+            "Even" => Parity::Even,
+            _ => Parity::None,
+        };
+
+        let flow_control = match config.flow_control.as_str() {
+            "Software" => FlowControl::Software,
+            "Hardware" => FlowControl::Hardware,
+            _ => FlowControl::None,
+        };
 
         let mut app = Self {
             available_ports: ports,
-            selected_port: default_port,
-            baud_rate: 115_200,
-            data_bits: DataBits::Eight,
-            stop_bits: StopBits::One,
-            parity: Parity::None,
-            flow_control: FlowControl::None,
+            selected_port,
+            baud_rate: config.baud_rate,
+            data_bits,
+            stop_bits,
+            parity,
+            flow_control,
             rts: false,
             dtr: false,
             is_connected: false,
-            dark_mode: false,
+            dark_mode: config.dark_mode,
             cmd_tx,
             evt_rx,
             script_rx_rx,
             rx_buffer: Vec::new(),
-            view_mode: ViewMode::Ascii,
+            view_mode: config.view_mode,
             cached_formatted_text: None,
-            auto_scroll: true,
-            // show_timestamps: true,
+            auto_scroll: config.auto_scroll,
             rx_bytes: 0,
             tx_bytes: 0,
-            active_tab: ToolTab::TransmitPresets,
+            active_tab: config.active_tab,
             send_text: String::new(),
-            line_ending: LineEnding::Crlf,
+            line_ending: config.line_ending,
             cmd_history: Vec::new(),
             cmd_history_idx: None,
-            preconfig_commands: vec![
-                PreconfigCommand {
-                    name: "Ping AT".into(),
-                    cmd: "AT".into(),
-                },
-                PreconfigCommand {
-                    name: "Device Info".into(),
-                    cmd: "ATI".into(),
-                },
-                PreconfigCommand {
-                    name: "Reset Device".into(),
-                    cmd: "AT+RST".into(),
-                },
-                PreconfigCommand {
-                    name: "Baud Check".into(),
-                    cmd: "AT+BAUD?".into(),
-                },
-            ],
+            preconfig_commands: config.preconfig_commands,
             new_preconfig_name: String::new(),
             new_preconfig_cmd: String::new(),
             file_path: None,
-            chunk_size: 256,
-            chunk_delay_ms: 10,
+            chunk_size: config.chunk_size,
+            chunk_delay_ms: config.chunk_delay_ms,
             file_progress: None,
-            script_text: r#"// Example Serial Script (Rhai)
-print("Sending Handshake...");
-serial_send("AT\r\n");
-
-let resp = serial_read_line(2000);
-print("Received: " + resp);
-
-if resp.contains("OK") {
-    print("Device Ready!");
-} else {
-    print("No response or error.");
+            script_text: r#"// serialforge Rhai Script Automation Example
+let counter = 0;
+while counter < 5 {
+    print(`Executing Step ${counter + 1}...`);
+    serial_write(`STATUS_QUERY_${counter}`);
+    sleep_ms(300);
+    let resp = serial_read_line(500);
+    print(`Got response: ${resp}`);
+    counter += 1;
 }
+print("Automation sequence completed.");
 "#
-            .to_string(),
+            .into(),
             script_running,
             script_log: Arc::new(Mutex::new(Vec::new())),
             system_log: Vec::new(),
@@ -197,12 +214,16 @@ if resp.contains("OK") {
         app
     }
 
-    fn log_system(&mut self, msg: &str) {
+    pub fn log_system(&mut self, msg: &str) {
         let time = Local::now().format("%H:%M:%S%.3f").to_string();
         self.system_log.push(format!("[{time}] {msg}"));
+        if self.system_log.len() > MAX_SYSTEM_LOG_ENTRIES {
+            let excess = self.system_log.len() - MAX_SYSTEM_LOG_ENTRIES;
+            self.system_log.drain(0..excess);
+        }
     }
 
-    fn refresh_ports(&mut self) {
+    pub fn refresh_ports(&mut self) {
         if let Ok(ports) = serialport::available_ports() {
             self.available_ports = ports.into_iter().map(|p| p.port_name).collect();
             if !self.available_ports.contains(&self.selected_port)
@@ -230,7 +251,6 @@ if resp.contains("OK") {
                 RxEvent::DataReceived(bytes) => {
                     self.rx_bytes += bytes.len();
                     self.rx_buffer.extend(bytes);
-                    const MAX_RX_BUFFER_SIZE: usize = 256 * 1024;
                     if self.rx_buffer.len() > MAX_RX_BUFFER_SIZE {
                         let excess = self.rx_buffer.len() - MAX_RX_BUFFER_SIZE;
                         self.rx_buffer.drain(0..excess);
@@ -255,30 +275,23 @@ if resp.contains("OK") {
         }
     }
 
-    fn send_string_command(&mut self, text: String) {
-        if !self.is_connected {
+    pub fn send_string_command(&mut self, text: String) {
+        if text.is_empty() {
             return;
         }
 
-        let eol = self.line_ending.as_bytes();
-        if text.is_empty() && eol.is_empty() {
-            return;
-        }
-
-        if !text.is_empty() && self.cmd_history.last() != Some(&text) {
+        if self.cmd_history.last() != Some(&text) {
             self.cmd_history.push(text.clone());
         }
         self.cmd_history_idx = None;
 
-        let mut payload = text.clone().into_bytes();
-        payload.extend_from_slice(eol);
+        let mut payload = text.into_bytes();
+        payload.extend_from_slice(self.line_ending.as_bytes());
         self.tx_bytes += payload.len();
         let _ = self.cmd_tx.send(TxCmd::SendData(payload));
-
-        self.log_system(&format!("TX Command: \"{text}\""));
     }
 
-    fn insert_script_text(&mut self, ctx: &egui::Context, editor_id: egui::Id, text: &str) {
+    pub fn insert_script_text(&mut self, ctx: &egui::Context, editor_id: egui::Id, text: &str) {
         let byte_offset = |value: &str, char_index: usize| {
             value
                 .char_indices()
@@ -307,7 +320,7 @@ if resp.contains("OK") {
         }
     }
 
-    fn run_script(&mut self, ctx: &egui::Context) {
+    pub fn run_script(&mut self, ctx: &egui::Context) {
         if self.script_running.load(Ordering::Relaxed) {
             return;
         }
@@ -332,7 +345,12 @@ if resp.contains("OK") {
             let log_clone = log.clone();
             let ctx_print = ctx_clone.clone();
             engine.on_print(move |s| {
-                log_clone.lock().unwrap().push(s.to_string());
+                let mut guard = log_clone.lock().unwrap();
+                guard.push(s.to_string());
+                if guard.len() > MAX_SCRIPT_LOG_ENTRIES {
+                    let excess = guard.len() - MAX_SCRIPT_LOG_ENTRIES;
+                    guard.drain(0..excess);
+                }
                 ctx_print.request_repaint();
             });
 
@@ -392,7 +410,7 @@ if resp.contains("OK") {
         });
     }
 
-    fn compute_formatted_text(&self) -> String {
+    pub fn compute_formatted_text(&self) -> String {
         use std::fmt::Write;
         match self.view_mode {
             ViewMode::Ascii => String::from_utf8_lossy(&self.rx_buffer).to_string(),
@@ -443,6 +461,34 @@ if resp.contains("OK") {
 }
 
 impl eframe::App for SerialForgeApp {
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        let config = AppConfig {
+            selected_port: self.selected_port.clone(),
+            baud_rate: self.baud_rate,
+            data_bits: match self.data_bits {
+                DataBits::Five => 5,
+                DataBits::Six => 6,
+                DataBits::Seven => 7,
+                DataBits::Eight => 8,
+            },
+            stop_bits: match self.stop_bits {
+                StopBits::Two => 2,
+                _ => 1,
+            },
+            parity: format!("{}", self.parity),
+            flow_control: format!("{}", self.flow_control),
+            dark_mode: self.dark_mode,
+            view_mode: self.view_mode,
+            auto_scroll: self.auto_scroll,
+            active_tab: self.active_tab,
+            line_ending: self.line_ending,
+            preconfig_commands: self.preconfig_commands.clone(),
+            chunk_size: self.chunk_size,
+            chunk_delay_ms: self.chunk_delay_ms,
+        };
+        eframe::set_value(storage, eframe::APP_KEY, &config);
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
 
@@ -456,156 +502,12 @@ impl eframe::App for SerialForgeApp {
 
         // 1. TOP PANEL: Hardware Setup & Theme Switcher
         egui::Panel::top("top_panel").show(ui, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                // ---------------------------------------------------------
-                // GROUP 1: Connection & Port Selection
-                // ---------------------------------------------------------
-                ui.horizontal(|ui| {
-                    if !self.is_connected {
-                        if ui.button("🔌 Connect").clicked() {
-                            let _ = self.cmd_tx.send(TxCmd::Connect {
-                                port_name: self.selected_port.clone(),
-                                baud_rate: self.baud_rate,
-                                data_bits: self.data_bits,
-                                stop_bits: self.stop_bits,
-                                parity: self.parity,
-                                flow_control: self.flow_control,
-                            });
-                        }
-                    } else if ui.button("❌ Disconnect").clicked() {
-                        let _ = self.cmd_tx.send(TxCmd::Disconnect);
-                    }
-
-                    ui.label("Port:");
-                    egui::ComboBox::from_id_salt("port_combo")
-                        .selected_text(&self.selected_port)
-                        .show_ui(ui, |ui| {
-                            for p in &self.available_ports {
-                                ui.selectable_value(&mut self.selected_port, p.clone(), p);
-                            }
-                        });
-
-                    if ui.button("🔄 R").clicked() {
-                        self.refresh_ports();
-                    }
-                });
-
-                ui.separator();
-
-                // ---------------------------------------------------------
-                // GROUP 2: Baud Rate & Data Bits
-                // ---------------------------------------------------------
-                ui.horizontal(|ui| {
-                    ui.label("Baud:");
-                    egui::ComboBox::from_id_salt("baud_combo")
-                        .width(0.0)
-                        .selected_text(format!("{}", self.baud_rate))
-                        .show_ui(ui, |ui| {
-                            for b in [
-                                9600, 19200, 38400, 57600, 115_200, 230_400, 460_800, 921_600,
-                            ] {
-                                ui.selectable_value(&mut self.baud_rate, b, b.to_string());
-                            }
-                        });
-
-                    ui.label("Data:");
-                    egui::ComboBox::from_id_salt("data_combo")
-                        .width(0.0)
-                        .selected_text(format!("{}", self.data_bits))
-                        .show_ui(ui, |ui| {
-                            for b in [
-                                DataBits::Five,
-                                DataBits::Six,
-                                DataBits::Seven,
-                                DataBits::Eight,
-                            ] {
-                                ui.selectable_value(&mut self.data_bits, b, b.to_string());
-                            }
-                        });
-                });
-
-                ui.separator();
-
-                // ---------------------------------------------------------
-                // GROUP 3: Parity & Stop Bits
-                // ---------------------------------------------------------
-                ui.horizontal_centered(|ui| {
-                    ui.label("Parity:");
-                    egui::ComboBox::from_id_salt("parity_combo")
-                        .width(0.0)
-                        .selected_text(format!("{}", self.parity))
-                        .show_ui(ui, |ui| {
-                            for b in [Parity::None, Parity::Odd, Parity::Even] {
-                                ui.selectable_value(&mut self.parity, b, b.to_string());
-                            }
-                        });
-
-                    ui.label("Bits:");
-                    egui::ComboBox::from_id_salt("bits_combo")
-                        .width(0.0)
-                        .selected_text(format!("{}", self.stop_bits))
-                        .show_ui(ui, |ui| {
-                            for b in [StopBits::One, StopBits::Two] {
-                                ui.selectable_value(&mut self.stop_bits, b, b.to_string());
-                            }
-                        });
-                });
-                ui.horizontal_wrapped(|ui| {
-                    ui.label("Flow:");
-                    egui::ComboBox::from_id_salt("flow_control_combo")
-                        .width(0.0)
-                        .selected_text(format!("{}", self.flow_control))
-                        .show_ui(ui, |ui| {
-                            for b in [
-                                FlowControl::None,
-                                FlowControl::Software,
-                                FlowControl::Hardware,
-                            ] {
-                                ui.selectable_value(&mut self.flow_control, b, b.to_string());
-                            }
-                        });
-                });
-                ui.separator();
-
-                // ---------------------------------------------------------
-                // GROUP 4: Hardware Control Signals
-                // ---------------------------------------------------------
-                ui.horizontal(|ui| {
-                    if ui.checkbox(&mut self.rts, "RTS").changed() && self.is_connected {
-                        let _ = self.cmd_tx.send(TxCmd::SetRts(self.rts));
-                    }
-                    if ui.checkbox(&mut self.dtr, "DTR").changed() && self.is_connected {
-                        let _ = self.cmd_tx.send(TxCmd::SetDtr(self.dtr));
-                    }
-                });
-
-                // ---------------------------------------------------------
-                // GROUP 5: Right-Aligned Theme Toggle
-                // ---------------------------------------------------------
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let theme_btn = if self.dark_mode {
-                        "🌙 Dark"
-                    } else {
-                        "☀️ Light"
-                    };
-                    if ui.button(theme_btn).clicked() {
-                        self.dark_mode = !self.dark_mode;
-                    }
-                });
-            });
+            ui::toolbar::render_toolbar(self, ui);
         });
 
         // 2. BOTTOM PANEL: System Status Summary
         egui::Panel::bottom("status_bar").show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(format!("Status: {}", self.status_msg));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(format!(
-                        "Tx: {} bytes | Rx: {} bytes",
-                        self.tx_bytes, self.rx_bytes
-                    ));
-                });
-            });
+            ui::status_bar::render_status_bar(self, ui);
         });
 
         // 3. BOTTOM TABBED TOOLBAR: Send & Presets, File Transfer, Scripting, Log Console
@@ -638,393 +540,23 @@ impl eframe::App for SerialForgeApp {
 
             match self.active_tab {
                 ToolTab::TransmitPresets => {
-                    ui.horizontal(|ui| {
-                        ui.label("Send String:");
-                        let text_entry = ui.add(
-                            egui::TextEdit::singleline(&mut self.send_text)
-                                .desired_width(280.0)
-                                .hint_text("Type command or use ↑/↓ for history"),
-                        );
-
-                        if text_entry.has_focus() {
-                            if ui.input(|i| i.key_pressed(egui::Key::ArrowUp)) {
-                                if !self.cmd_history.is_empty() {
-                                    let next_idx = match self.cmd_history_idx {
-                                        None => self.cmd_history.len().saturating_sub(1),
-                                        Some(idx) => idx.saturating_sub(1),
-                                    };
-                                    self.cmd_history_idx = Some(next_idx);
-                                    self.send_text.clone_from(&self.cmd_history[next_idx]);
-                                }
-                            } else if ui.input(|i| i.key_pressed(egui::Key::ArrowDown))
-                                && let Some(idx) = self.cmd_history_idx
-                            {
-                                if idx + 1 < self.cmd_history.len() {
-                                    let next_idx = idx + 1;
-                                    self.cmd_history_idx = Some(next_idx);
-                                    self.send_text.clone_from(&self.cmd_history[next_idx]);
-                                } else {
-                                    self.cmd_history_idx = None;
-                                    self.send_text.clear();
-                                }
-                            }
-                        }
-
-                        egui::ComboBox::from_id_salt("cmd_history_combo")
-                            .selected_text("📜 History")
-                            .show_ui(ui, |ui| {
-                                if self.cmd_history.is_empty() {
-                                    ui.label("No history yet");
-                                } else {
-                                    for h in self.cmd_history.iter().rev() {
-                                        if ui.selectable_label(false, h).clicked() {
-                                            self.send_text.clone_from(h);
-                                        }
-                                    }
-                                }
-                            });
-
-                        ui.label("EOL:");
-                        egui::ComboBox::from_id_salt("line_ending_combo")
-                            .selected_text(match self.line_ending {
-                                LineEnding::None => "None",
-                                LineEnding::Null => "NULL (0x00)",
-                                LineEnding::CR => "CR (\\r)",
-                                LineEnding::LF => "LF (\\n)",
-                                LineEnding::Crlf => "CRLF (\\r\\n)",
-                                LineEnding::Etx => "ETX (0x03)",
-                            })
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(
-                                    &mut self.line_ending,
-                                    LineEnding::None,
-                                    "None",
-                                );
-                                ui.selectable_value(
-                                    &mut self.line_ending,
-                                    LineEnding::Null,
-                                    "NULL (0x00)",
-                                );
-                                ui.selectable_value(
-                                    &mut self.line_ending,
-                                    LineEnding::CR,
-                                    "CR (\\r)",
-                                );
-                                ui.selectable_value(
-                                    &mut self.line_ending,
-                                    LineEnding::LF,
-                                    "LF (\\n)",
-                                );
-                                ui.selectable_value(
-                                    &mut self.line_ending,
-                                    LineEnding::Crlf,
-                                    "CRLF (\\r\\n)",
-                                );
-                                ui.selectable_value(
-                                    &mut self.line_ending,
-                                    LineEnding::Etx,
-                                    "ETX (0x03)",
-                                );
-                            });
-
-                        let enter_pressed = text_entry.lost_focus()
-                            && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                        let trigger_send = ui.button("Send Text").clicked() || enter_pressed;
-
-                        if trigger_send {
-                            let text = self.send_text.clone();
-                            self.send_string_command(text);
-                            self.send_text.clear();
-                            if enter_pressed {
-                                text_entry.request_focus();
-                            }
-                        }
-                    });
-
-                    ui.separator();
-
-                    ui.label(egui::RichText::new("⭐ Preset Command Macros").strong());
-                    let mut to_send = None;
-                    let mut to_remove = None;
-
-                    egui::Grid::new("preconfig_grid")
-                        .striped(true)
-                        .spacing([12.0, 6.0])
-                        .show(ui, |ui| {
-                            ui.label(egui::RichText::new("Preset Name").strong());
-                            ui.label(egui::RichText::new("Command String").strong());
-                            ui.label(egui::RichText::new("Actions").strong());
-                            ui.end_row();
-
-                            for (idx, item) in self.preconfig_commands.iter().enumerate() {
-                                ui.label(&item.name);
-                                ui.monospace(&item.cmd);
-
-                                ui.horizontal(|ui| {
-                                    if ui.button("▶ Send").clicked() {
-                                        to_send = Some(item.cmd.clone());
-                                    }
-                                    if ui.button("📋 Load").clicked() {
-                                        self.send_text.clone_from(&item.cmd);
-                                    }
-                                    if ui.button("🗑").clicked() {
-                                        to_remove = Some(idx);
-                                    }
-                                });
-                                ui.end_row();
-                            }
-                        });
-
-                    if let Some(cmd) = to_send {
-                        self.send_string_command(cmd);
-                    }
-                    if let Some(idx) = to_remove {
-                        self.preconfig_commands.remove(idx);
-                    }
-
-                    ui.horizontal(|ui| {
-                        ui.label("New Preset:");
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.new_preconfig_name)
-                                .hint_text("Name")
-                                .desired_width(120.0),
-                        );
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.new_preconfig_cmd)
-                                .hint_text("Command String")
-                                .desired_width(220.0),
-                        );
-
-                        if ui.button("➕ Add Preset").clicked()
-                            && !self.new_preconfig_cmd.is_empty()
-                        {
-                            let name = if self.new_preconfig_name.is_empty() {
-                                self.new_preconfig_cmd.clone()
-                            } else {
-                                self.new_preconfig_name.clone()
-                            };
-                            self.preconfig_commands.push(PreconfigCommand {
-                                name,
-                                cmd: self.new_preconfig_cmd.clone(),
-                            });
-                            self.new_preconfig_name.clear();
-                            self.new_preconfig_cmd.clear();
-                        }
-                    });
+                    ui::tabs::presets::render_presets_tab(self, ui);
                 }
                 ToolTab::BinaryFile => {
-                    ui.horizontal(|ui| {
-                        ui.label("Binary Payload:");
-                        if ui.button("📁 Select File").clicked()
-                            && let Some(path) = FileDialog::new().pick_file()
-                        {
-                            self.file_path = Some(path);
-                        }
-
-                        if let Some(ref path) = self.file_path {
-                            ui.label(path.file_name().unwrap_or_default().to_string_lossy());
-                        }
-
-                        ui.add(egui::DragValue::new(&mut self.chunk_size).prefix("Chunk size: "));
-                        ui.add(egui::DragValue::new(&mut self.chunk_delay_ms).prefix("Delay ms: "));
-
-                        if ui.button("📤 Transmit File").clicked()
-                            && self.is_connected
-                            && let Some(ref path) = self.file_path
-                        {
-                            let _ = self.cmd_tx.send(TxCmd::SendFile {
-                                path: path.clone(),
-                                chunk_size: self.chunk_size,
-                                delay_ms: self.chunk_delay_ms,
-                            });
-                        }
-                    });
-
-                    if let Some((sent, total)) = self.file_progress {
-                        let progress = (sent as f32) / (total as f32);
-                        ui.add(
-                            egui::ProgressBar::new(progress).text(format!("{sent}/{total} Bytes")),
-                        );
-                    }
+                    ui::tabs::binary_file::render_binary_file_tab(self, ui);
                 }
                 ToolTab::Scripting => {
-                    ui.horizontal(|ui| {
-                        let is_running = self.script_running.load(Ordering::Relaxed);
-                        if !is_running {
-                            if ui.button("▶ Run Script").clicked() && self.is_connected {
-                                self.run_script(&ctx);
-                            }
-                        } else if ui.button("⏹ Stop Script").clicked() {
-                            self.script_running.store(false, Ordering::Relaxed);
-                            self.log_system("Stopping Rhai script...");
-                        }
-                        if ui.button("📂 Open Script").clicked()
-                            && let Some(path) = FileDialog::new()
-                                .add_filter("Rhai scripts", &["rhai"])
-                                .pick_file()
-                        {
-                            match std::fs::read_to_string(&path) {
-                                Ok(script) => {
-                                    self.script_text = script;
-                                    self.status_msg = format!(
-                                        "Loaded script: {}",
-                                        path.file_name().unwrap_or_default().to_string_lossy()
-                                    );
-                                }
-                                Err(error) => {
-                                    self.status_msg = format!("Script load failed: {error}");
-                                    self.log_system(&self.status_msg.clone());
-                                }
-                            }
-                        }
-                        if is_running {
-                            ui.spinner();
-                            ui.label("Script executing...");
-                        }
-                    });
-
-                    ui.columns(2, |cols| {
-                        let ctx = cols[0].ctx().clone();
-                        let editor_id = egui::Id::new("rhai_script_editor");
-                        let paste_requested = cols[0]
-                            .horizontal(|ui| {
-                                let paste_requested = ui.button("📋 Paste").clicked();
-                                ui.label("Rhai Script Editor:");
-                                paste_requested
-                            })
-                            .inner;
-                        let editor_has_focus = ctx.memory(|memory| memory.has_focus(editor_id));
-                        let key_paste_requested = editor_has_focus
-                            && ctx.input(|input| {
-                                input.key_pressed(egui::Key::V) && input.modifiers.command
-                            });
-
-                        let layouter =
-                            &mut |ui: &egui::Ui,
-                                  string: &dyn egui::TextBuffer,
-                                  _wrap_width: f32| {
-                                ui.painter()
-                                    .layout_job(highlight_rhai_code(ui, string.as_str()))
-                            };
-
-                        let mut paste_text: Option<String> = if editor_has_focus {
-                            ctx.input(|input| {
-                                input.events.iter().find_map(|event| match event {
-                                    egui::Event::Paste(text) => Some(text.clone()),
-                                    _ => None,
-                                })
-                            })
-                        } else {
-                            None
-                        };
-
-                        if paste_text.is_none() && (paste_requested || key_paste_requested) {
-                            match arboard::Clipboard::new()
-                                .and_then(|mut clipboard| clipboard.get_text())
-                            {
-                                Ok(text) => paste_text = Some(text),
-                                Err(error) => {
-                                    self.log_system(&format!("Clipboard paste failed: {error}"));
-                                }
-                            }
-                        }
-
-                        if let Some(text) = paste_text {
-                            ctx.input_mut(|input| {
-                                input
-                                    .events
-                                    .retain(|event| !matches!(event, egui::Event::Paste(_)));
-                            });
-                            self.insert_script_text(&ctx, editor_id, &text);
-                        }
-
-                        let editor_width = cols[0].available_width();
-                        let editor_response = scrollable_script_field(
-                            &mut cols[0],
-                            "rhai_editor_scroll",
-                            egui::TextEdit::multiline(&mut self.script_text)
-                                .id(editor_id)
-                                .font(egui::TextStyle::Monospace)
-                                .layouter(layouter)
-                                .desired_width(editor_width),
-                        )
-                        .inner;
-
-                        if paste_requested {
-                            editor_response.request_focus();
-                        }
-
-                        cols[1].label("Script Log:");
-                        let mut logs = self.script_log.lock().unwrap().join("\n");
-                        let log_width = cols[1].available_width();
-                        scrollable_script_field(
-                            &mut cols[1],
-                            "rhai_log_scroll",
-                            egui::TextEdit::multiline(&mut logs)
-                                .font(egui::TextStyle::Monospace)
-                                .desired_width(log_width),
-                        );
-                    });
+                    ui::tabs::scripting::render_scripting_tab(self, ui);
                 }
                 ToolTab::SystemLog => {
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("System Activity Console").strong());
-                        if ui.button("🗑 Clear Log").clicked() {
-                            self.system_log.clear();
-                        }
-                    });
-
-                    let mut logs = self.system_log.join("\n");
-                    ui.add(
-                        egui::TextEdit::multiline(&mut logs)
-                            .font(egui::TextStyle::Monospace)
-                            .desired_rows(6)
-                            .desired_width(f32::INFINITY),
-                    );
+                    ui::tabs::system_log::render_system_log_tab(self, ui);
                 }
             }
         });
 
         // 4. CENTRAL PANEL: Primary Serial Terminal Display
         egui::CentralPanel::default().show(ui, |ui| {
-            ui.horizontal(|ui| {
-                let prev_mode = self.view_mode;
-                ui.selectable_value(&mut self.view_mode, ViewMode::Ascii, "ASCII");
-                ui.selectable_value(&mut self.view_mode, ViewMode::Hex, "HEX");
-                ui.selectable_value(&mut self.view_mode, ViewMode::Mixed, "Mixed");
-                if self.view_mode != prev_mode {
-                    self.cached_formatted_text = None;
-                }
-
-                ui.separator();
-                ui.checkbox(&mut self.auto_scroll, "Auto-Scroll");
-                // TODO
-                // ui.checkbox(&mut self.show_timestamps, "Timestamps");
-
-                if ui.button("🗑 Clear Console").clicked() {
-                    self.rx_buffer.clear();
-                    self.cached_formatted_text = None;
-                }
-            });
-
-            ui.separator();
-
-            egui::ScrollArea::vertical()
-                .auto_shrink([false; 2])
-                .stick_to_bottom(self.auto_scroll)
-                .show(ui, |ui| {
-                    if self.cached_formatted_text.is_none() {
-                        self.cached_formatted_text = Some(self.compute_formatted_text());
-                    }
-                    let formatted_text = self.cached_formatted_text.as_mut().unwrap();
-
-                    ui.add(
-                        egui::TextEdit::multiline(formatted_text)
-                            .font(egui::TextStyle::Monospace)
-                            .desired_width(f32::INFINITY)
-                            .lock_focus(true),
-                    );
-                });
+            ui::terminal::render_terminal(self, ui);
         });
     }
 }
@@ -1113,5 +645,14 @@ mod tests {
         assert_eq!(app.cmd_history, vec!["AT".to_string()]);
         app.send_string_command("ATI".into());
         assert_eq!(app.cmd_history, vec!["AT".to_string(), "ATI".to_string()]);
+    }
+
+    #[test]
+    fn test_system_log_capping() {
+        let mut app = create_test_app();
+        for i in 0..MAX_SYSTEM_LOG_ENTRIES + 100 {
+            app.log_system(&format!("log {i}"));
+        }
+        assert_eq!(app.system_log.len(), MAX_SYSTEM_LOG_ENTRIES);
     }
 }
