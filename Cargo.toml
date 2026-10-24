@@ -9,11 +9,11 @@ name = "serialforge"
 path = "src/main.rs"
 # Windows build (uses native Windows APIs automatically)
 [target.'cfg(target_os = "windows")'.dependencies]
-eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow", "persistence"] }
+eframe = { version = "0.37", default-features = false, features = ["system_fonts", "glow", "persistence"] }
 
 # Linux build (requires explicit display servers since defaults are off)
 [target.'cfg(target_os = "linux")'.dependencies]
-eframe = { version = "0.37", default-features = false, features = ["default_fonts", "glow", "persistence", "x11", "wayland"] }
+eframe = { version = "0.37", default-features = false, features = ["system_fonts", "glow", "persistence", "x11", "wayland"] }
 
 [dependencies]
 #eframe = { version = "0.37", default-features = false, features = ["persistence","glow",  "default_fonts"] }
@@ -26,6 +26,7 @@ crossbeam-channel = "0.5"
 rfd = "0.17"         # Native file open dialogs
 rhai = "1.26"        # Embedded scripting engine
 chrono = "0.4"      # Precise UI timestamps
+eframe = "0.37"
 
 [build-dependencies]
 winres = "0.1"
