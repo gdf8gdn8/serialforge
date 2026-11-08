@@ -68,7 +68,9 @@ pub struct SerialForgeApp {
     pub script_rx_rx: Receiver<Vec<u8>>,
 
     pub rx_buffer: Vec<u8>,
+    pub rx_entries: Vec<crate::types::TerminalEntry>,
     pub view_mode: ViewMode,
+    pub show_timestamps: bool,
     pub cached_formatted_text: Option<String>,
     pub auto_scroll: bool,
     pub rx_bytes: usize,
@@ -196,7 +198,9 @@ impl SerialForgeApp {
             evt_rx,
             script_rx_rx,
             rx_buffer: Vec::new(),
+            rx_entries: Vec::new(),
             view_mode: config.view_mode,
+            show_timestamps: config.show_timestamps,
             cached_formatted_text: None,
             auto_scroll: config.auto_scroll,
             rx_bytes: 0,
@@ -347,6 +351,14 @@ print("Automation sequence completed.");
                     {
                         self.log_file_bytes += bytes.len();
                         let _ = f.flush();
+                    }
+                    self.rx_entries.push(crate::types::TerminalEntry {
+                        timestamp: chrono::Local::now(),
+                        data: bytes.clone(),
+                    });
+                    if self.rx_entries.len() > 10_000 {
+                        let excess = self.rx_entries.len() - 10_000;
+                        self.rx_entries.drain(0..excess);
                     }
                     self.rx_buffer.extend(bytes);
                     if self.rx_buffer.len() > MAX_RX_BUFFER_SIZE {
@@ -618,6 +630,63 @@ print("Automation sequence completed.");
 
     pub fn compute_formatted_text(&self) -> String {
         use std::fmt::Write;
+
+        if self.show_timestamps {
+            let mut out = String::new();
+            for entry in &self.rx_entries {
+                let ts = entry.timestamp.format("[%H:%M:%S%.3f] ").to_string();
+                match self.view_mode {
+                    ViewMode::Ascii => {
+                        let text = String::from_utf8_lossy(&entry.data);
+                        for (i, line) in text.split('\n').enumerate() {
+                            if i > 0 {
+                                out.push('\n');
+                            }
+                            if !line.is_empty() || i == 0 {
+                                out.push_str(&ts);
+                                out.push_str(line.trim_end_matches('\r'));
+                            }
+                        }
+                        out.push('\n');
+                    }
+                    ViewMode::Hex => {
+                        for chunk in entry.data.chunks(16) {
+                            out.push_str(&ts);
+                            for (j, &b) in chunk.iter().enumerate() {
+                                if j > 0 {
+                                    out.push(' ');
+                                }
+                                let _ = write!(out, "{b:02X}");
+                            }
+                            out.push('\n');
+                        }
+                    }
+                    ViewMode::Mixed => {
+                        for chunk in entry.data.chunks(16) {
+                            out.push_str(&ts);
+                            let mut hex_part = String::with_capacity(48);
+                            for (j, &b) in chunk.iter().enumerate() {
+                                if j > 0 {
+                                    hex_part.push(' ');
+                                }
+                                let _ = write!(hex_part, "{b:02X}");
+                            }
+                            let _ = write!(out, "{hex_part:<48} | ");
+                            for &b in chunk {
+                                if b.is_ascii_graphic() || b == b' ' {
+                                    out.push(b as char);
+                                } else {
+                                    out.push('.');
+                                }
+                            }
+                            out.push('\n');
+                        }
+                    }
+                }
+            }
+            return out;
+        }
+
         match self.view_mode {
             ViewMode::Ascii => String::from_utf8_lossy(&self.rx_buffer).to_string(),
             ViewMode::Hex => {
@@ -687,6 +756,7 @@ impl eframe::App for SerialForgeApp {
             dark_mode: self.dark_mode,
             view_mode: self.view_mode,
             auto_scroll: self.auto_scroll,
+            show_timestamps: self.show_timestamps,
             active_tab: self.active_tab,
             line_ending: self.line_ending,
             preconfig_commands: self.preconfig_commands.clone(),
@@ -812,7 +882,9 @@ mod tests {
             evt_rx,
             script_rx_rx,
             rx_buffer: Vec::new(),
+            rx_entries: Vec::new(),
             view_mode: ViewMode::Ascii,
+            show_timestamps: false,
             cached_formatted_text: None,
             auto_scroll: true,
             rx_bytes: 0,
@@ -895,5 +967,18 @@ mod tests {
             app.log_system(&format!("log {i}"));
         }
         assert_eq!(app.system_log.len(), MAX_SYSTEM_LOG_ENTRIES);
+    }
+
+    #[test]
+    fn test_show_timestamps_formatting() {
+        let mut app = create_test_app();
+        app.show_timestamps = true;
+        app.rx_entries.push(crate::types::TerminalEntry {
+            timestamp: chrono::Local::now(),
+            data: b"HELLO WORLD\n".to_vec(),
+        });
+        let formatted = app.compute_formatted_text();
+        assert!(formatted.contains("HELLO WORLD"));
+        assert!(formatted.starts_with('['));
     }
 }

@@ -18,6 +18,11 @@ pub fn render_terminal(app: &mut SerialForgeApp, ui: &mut egui::Ui) {
 
         ui.separator();
         ui.checkbox(&mut app.auto_scroll, "Auto-Scroll");
+        let prev_ts = app.show_timestamps;
+        ui.checkbox(&mut app.show_timestamps, "Timestamps");
+        if app.show_timestamps != prev_ts {
+            app.cached_formatted_text = None;
+        }
 
         ui.separator();
 
@@ -82,6 +87,7 @@ pub fn render_terminal(app: &mut SerialForgeApp, ui: &mut egui::Ui) {
 
         if ui.button("🗑 Clear Console").clicked() {
             app.rx_buffer.clear();
+            app.rx_entries.clear();
             app.cached_formatted_text = None;
         }
     });
@@ -97,9 +103,35 @@ pub fn render_terminal(app: &mut SerialForgeApp, ui: &mut egui::Ui) {
             }
             let formatted_text = app.cached_formatted_text.as_mut().unwrap();
 
+            let is_ascii = app.view_mode == ViewMode::Ascii;
+            let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
+                let text = buf.as_str();
+                let mut layout_job = if is_ascii {
+                    crate::highlighter::highlight_terminal_ansi(ui, text)
+                } else {
+                    let mut job = egui::text::LayoutJob::default();
+                    job.append(
+                        text,
+                        0.0,
+                        egui::TextFormat {
+                            font_id: egui::FontId::monospace(12.0),
+                            color: if ui.visuals().dark_mode {
+                                egui::Color32::from_rgb(215, 215, 215)
+                            } else {
+                                egui::Color32::from_rgb(30, 30, 30)
+                            },
+                            ..Default::default()
+                        },
+                    );
+                    job
+                };
+                layout_job.wrap.max_width = wrap_width;
+                ui.painter().layout_job(layout_job)
+            };
+
             ui.add(
                 egui::TextEdit::multiline(formatted_text)
-                    .font(egui::TextStyle::Monospace)
+                    .layouter(&mut layouter)
                     .desired_width(f32::INFINITY)
                     .lock_focus(true),
             );

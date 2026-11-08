@@ -1,3 +1,4 @@
+use chrono::{DateTime, Local};
 use serde::{
     Deserialize,
     Serialize,
@@ -9,6 +10,12 @@ use serialport::{
     StopBits,
 };
 use std::path::PathBuf;
+
+#[derive(Debug, Clone)]
+pub struct TerminalEntry {
+    pub timestamp: DateTime<Local>,
+    pub data: Vec<u8>,
+}
 
 #[derive(Debug, Clone)]
 pub enum TxCmd {

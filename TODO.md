@@ -19,8 +19,8 @@ This document outlines planned improvements, feature suggestions, and architectu
 - [x] **Repeat / Periodic Transmit**: Interval timer to repeatedly send a preset or string every $N$ milliseconds.
 
 ### 4. Terminal Display & Timestamps
-- [ ] **Line-by-Line Timestamps**: Toggle timestamp prefixes per received line or packet (e.g. `[11:42:05.123] RX: <data>`) to aid protocol latency and jitter analysis.
-- [ ] **ANSI / VT100 Escape Sequence Support**: Basic color/formatting decoding for embedded serial console output.
+- [x] **Line-by-Line Timestamps**: Toggle timestamp prefixes per received line or packet (e.g. `[11:42:05.123] RX: <data>`) to aid protocol latency and jitter analysis.
+- [x] **ANSI / VT100 Escape Sequence Support**: Basic color/formatting decoding for embedded serial console output.
 
 ### 5. Extended Automation & Scripting (Rhai)
 - [x] **Binary & Hex Helpers in Rhai**: Built-in methods like `serial_write_hex("01 03 ...")` and raw byte slice helpers.

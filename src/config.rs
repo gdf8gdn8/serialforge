@@ -25,6 +25,7 @@ pub struct AppConfig {
     pub dark_mode: bool,
     pub view_mode: ViewMode,
     pub auto_scroll: bool,
+    pub show_timestamps: bool,
     pub active_tab: ToolTab,
     pub line_ending: LineEnding,
     pub preconfig_commands: Vec<PreconfigCommand>,
@@ -45,6 +46,7 @@ impl Default for AppConfig {
             dark_mode: false,
             view_mode: ViewMode::Ascii,
             auto_scroll: true,
+            show_timestamps: false,
             active_tab: ToolTab::TransmitPresets,
             line_ending: LineEnding::Crlf,
             preconfig_commands: vec![
