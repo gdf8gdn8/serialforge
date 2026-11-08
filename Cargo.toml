@@ -45,7 +45,6 @@ strip = true
 inherits = "release"
 lto = true
 panic = "abort"
-offset-debug = false
 
 
 [package.metadata.deb]
