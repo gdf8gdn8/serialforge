@@ -1,7 +1,7 @@
 use cansi::v3::{
-    categorise_text,
     Color as AnsiColor,
     Intensity,
+    categorise_text,
 };
 use eframe::egui;
 
@@ -42,8 +42,8 @@ pub fn ansi_to_egui_color(color: AnsiColor, intensity: Intensity, is_dark: bool)
 }
 
 pub fn highlight_terminal_ansi(ui: &egui::Ui, text: &str) -> egui::text::LayoutJob {
-    use egui::text::LayoutJob;
     use egui::TextFormat;
+    use egui::text::LayoutJob;
 
     let is_dark = ui.visuals().dark_mode;
     let font_id = egui::FontId::monospace(12.0);
@@ -64,9 +64,10 @@ pub fn highlight_terminal_ansi(ui: &egui::Ui, text: &str) -> egui::text::LayoutJ
         let intensity = slice.intensity.unwrap_or(Intensity::Normal);
         let fg_color = slice.fg.unwrap_or(AnsiColor::Black);
 
-        let fg = if slice.fg.is_none() || (fg_color == AnsiColor::Black && intensity == Intensity::Normal && is_dark) {
-            default_fg
-        } else if fg_color == AnsiColor::White && !is_dark {
+        let fg = if slice.fg.is_none()
+            || (fg_color == AnsiColor::Black && intensity == Intensity::Normal && is_dark)
+            || fg_color == AnsiColor::White && !is_dark
+        {
             default_fg
         } else {
             ansi_to_egui_color(fg_color, intensity, is_dark)

@@ -40,7 +40,11 @@ pub fn render_toolbar(app: &mut SerialForgeApp, ui: &mut egui::Ui) {
                 }
             });
 
-        if ui.button("🔄").on_hover_text("Refresh available ports").clicked() {
+        if ui
+            .button("🔄")
+            .on_hover_text("Refresh available ports")
+            .clicked()
+        {
             app.refresh_ports();
         }
 

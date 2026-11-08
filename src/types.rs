@@ -1,4 +1,7 @@
-use chrono::{DateTime, Local};
+use chrono::{
+    DateTime,
+    Local,
+};
 use serde::{
     Deserialize,
     Serialize,
