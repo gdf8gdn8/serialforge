@@ -76,6 +76,19 @@ pub struct SerialForgeApp {
     pub rx_bytes: usize,
     pub tx_bytes: usize,
 
+    // Search & Filter
+    pub search_query: String,
+    pub search_is_regex: bool,
+    pub search_case_sensitive: bool,
+    pub search_match_count: usize,
+    pub current_search_idx: usize,
+    pub scroll_to_search_idx: Option<usize>,
+    pub show_search_bar: bool,
+
+    pub filter_text: String,
+    pub filter_is_regex: bool,
+    pub filter_invert: bool,
+
     // Session Logging (Log to File)
     pub log_file: Option<File>,
     pub log_file_path: Option<PathBuf>,
@@ -205,6 +218,16 @@ impl SerialForgeApp {
             auto_scroll: config.auto_scroll,
             rx_bytes: 0,
             tx_bytes: 0,
+            search_query: String::new(),
+            search_is_regex: false,
+            search_case_sensitive: false,
+            search_match_count: 0,
+            current_search_idx: 0,
+            scroll_to_search_idx: None,
+            show_search_bar: false,
+            filter_text: String::new(),
+            filter_is_regex: false,
+            filter_invert: false,
             log_file: None,
             log_file_path: None,
             log_file_bytes: 0,
@@ -631,6 +654,29 @@ print("Automation sequence completed.");
     pub fn compute_formatted_text(&self) -> String {
         use std::fmt::Write;
 
+        // Compile filter matcher if filter is set
+        let filter_regex = if !self.filter_text.is_empty() && self.filter_is_regex {
+            regex::Regex::new(&self.filter_text).ok()
+        } else {
+            None
+        };
+
+        let line_matches_filter = |line: &str| -> bool {
+            if self.filter_text.is_empty() {
+                return true;
+            }
+            let is_match = if let Some(ref re) = filter_regex {
+                re.is_match(line)
+            } else {
+                line.to_lowercase().contains(&self.filter_text.to_lowercase())
+            };
+            if self.filter_invert {
+                !is_match
+            } else {
+                is_match
+            }
+        };
+
         if self.show_timestamps {
             let mut out = String::new();
             for entry in &self.rx_entries {
@@ -638,32 +684,17 @@ print("Automation sequence completed.");
                 match self.view_mode {
                     ViewMode::Ascii => {
                         let text = String::from_utf8_lossy(&entry.data);
-                        for (i, line) in text.split('\n').enumerate() {
-                            if i > 0 {
+                        for line in text.split('\n') {
+                            let clean_line = line.trim_end_matches('\r');
+                            if !clean_line.is_empty() && line_matches_filter(clean_line) {
+                                out.push_str(&ts);
+                                out.push_str(clean_line);
                                 out.push('\n');
                             }
-                            if !line.is_empty() || i == 0 {
-                                out.push_str(&ts);
-                                out.push_str(line.trim_end_matches('\r'));
-                            }
                         }
-                        out.push('\n');
                     }
                     ViewMode::Hex => {
                         for chunk in entry.data.chunks(16) {
-                            out.push_str(&ts);
-                            for (j, &b) in chunk.iter().enumerate() {
-                                if j > 0 {
-                                    out.push(' ');
-                                }
-                                let _ = write!(out, "{b:02X}");
-                            }
-                            out.push('\n');
-                        }
-                    }
-                    ViewMode::Mixed => {
-                        for chunk in entry.data.chunks(16) {
-                            out.push_str(&ts);
                             let mut hex_part = String::with_capacity(48);
                             for (j, &b) in chunk.iter().enumerate() {
                                 if j > 0 {
@@ -671,15 +702,36 @@ print("Automation sequence completed.");
                                 }
                                 let _ = write!(hex_part, "{b:02X}");
                             }
-                            let _ = write!(out, "{hex_part:<48} | ");
+                            if line_matches_filter(&hex_part) {
+                                out.push_str(&ts);
+                                out.push_str(&hex_part);
+                                out.push('\n');
+                            }
+                        }
+                    }
+                    ViewMode::Mixed => {
+                        for chunk in entry.data.chunks(16) {
+                            let mut hex_part = String::with_capacity(48);
+                            for (j, &b) in chunk.iter().enumerate() {
+                                if j > 0 {
+                                    hex_part.push(' ');
+                                }
+                                let _ = write!(hex_part, "{b:02X}");
+                            }
+                            let mut ascii_part = String::with_capacity(16);
                             for &b in chunk {
                                 if b.is_ascii_graphic() || b == b' ' {
-                                    out.push(b as char);
+                                    ascii_part.push(b as char);
                                 } else {
-                                    out.push('.');
+                                    ascii_part.push('.');
                                 }
                             }
-                            out.push('\n');
+                            let line_repr = format!("{hex_part:<48} | {ascii_part}");
+                            if line_matches_filter(&line_repr) {
+                                out.push_str(&ts);
+                                out.push_str(&line_repr);
+                                out.push('\n');
+                            }
                         }
                     }
                 }
@@ -688,31 +740,47 @@ print("Automation sequence completed.");
         }
 
         match self.view_mode {
-            ViewMode::Ascii => String::from_utf8_lossy(&self.rx_buffer).to_string(),
+            ViewMode::Ascii => {
+                if self.filter_text.is_empty() {
+                    String::from_utf8_lossy(&self.rx_buffer).to_string()
+                } else {
+                    let mut out = String::new();
+                    let text = String::from_utf8_lossy(&self.rx_buffer);
+                    for line in text.split('\n') {
+                        let clean = line.trim_end_matches('\r');
+                        if line_matches_filter(clean) {
+                            out.push_str(clean);
+                            out.push('\n');
+                        }
+                    }
+                    out
+                }
+            }
             ViewMode::Hex => {
                 let mut out = String::with_capacity(
                     self.rx_buffer.len().saturating_mul(3)
                         + self.rx_buffer.len().checked_div(16).unwrap_or(0),
                 );
-                for (i, chunk) in self.rx_buffer.chunks(16).enumerate() {
-                    if i > 0 {
-                        out.push('\n');
-                    }
+                for chunk in self.rx_buffer.chunks(16) {
+                    let mut line = String::with_capacity(48);
                     for (j, &b) in chunk.iter().enumerate() {
                         if j > 0 {
-                            out.push(' ');
+                            line.push(' ');
                         }
-                        let _ = write!(out, "{b:02X}");
+                        let _ = write!(line, "{b:02X}");
+                    }
+                    if line_matches_filter(&line) {
+                        if !out.is_empty() {
+                            out.push('\n');
+                        }
+                        out.push_str(&line);
                     }
                 }
                 out
             }
             ViewMode::Mixed => {
                 let mut out = String::with_capacity(self.rx_buffer.len().saturating_mul(5));
-                for (i, chunk) in self.rx_buffer.chunks(16).enumerate() {
-                    if i > 0 {
-                        out.push('\n');
-                    }
+                for chunk in self.rx_buffer.chunks(16) {
                     let mut hex_part = String::with_capacity(48);
                     for (j, &b) in chunk.iter().enumerate() {
                         if j > 0 {
@@ -720,13 +788,20 @@ print("Automation sequence completed.");
                         }
                         let _ = write!(hex_part, "{b:02X}");
                     }
-                    let _ = write!(out, "{hex_part:<48} | ");
+                    let mut ascii_part = String::with_capacity(16);
                     for &b in chunk {
                         if b.is_ascii_graphic() || b == b' ' {
-                            out.push(b as char);
+                            ascii_part.push(b as char);
                         } else {
-                            out.push('.');
+                            ascii_part.push('.');
                         }
+                    }
+                    let line = format!("{hex_part:<48} | {ascii_part}");
+                    if line_matches_filter(&line) {
+                        if !out.is_empty() {
+                            out.push('\n');
+                        }
+                        out.push_str(&line);
                     }
                 }
                 out
@@ -757,6 +832,9 @@ impl eframe::App for SerialForgeApp {
             view_mode: self.view_mode,
             auto_scroll: self.auto_scroll,
             show_timestamps: self.show_timestamps,
+            filter_text: self.filter_text.clone(),
+            filter_is_regex: self.filter_is_regex,
+            filter_invert: self.filter_invert,
             active_tab: self.active_tab,
             line_ending: self.line_ending,
             preconfig_commands: self.preconfig_commands.clone(),
@@ -889,6 +967,16 @@ mod tests {
             auto_scroll: true,
             rx_bytes: 0,
             tx_bytes: 0,
+            search_query: String::new(),
+            search_is_regex: false,
+            search_case_sensitive: false,
+            search_match_count: 0,
+            current_search_idx: 0,
+            scroll_to_search_idx: None,
+            show_search_bar: false,
+            filter_text: String::new(),
+            filter_is_regex: false,
+            filter_invert: false,
             log_file: None,
             log_file_path: None,
             log_file_bytes: 0,

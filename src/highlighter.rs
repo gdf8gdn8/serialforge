@@ -41,7 +41,17 @@ pub fn ansi_to_egui_color(color: AnsiColor, intensity: Intensity, is_dark: bool)
     }
 }
 
+#[allow(dead_code)]
 pub fn highlight_terminal_ansi(ui: &egui::Ui, text: &str) -> egui::text::LayoutJob {
+    highlight_terminal_ansi_with_search(ui, text, None, 0)
+}
+
+pub fn highlight_terminal_ansi_with_search(
+    ui: &egui::Ui,
+    text: &str,
+    search_ranges: Option<&[(usize, usize)]>, // list of (start_byte, end_byte)
+    active_match_idx: usize,
+) -> egui::text::LayoutJob {
     use egui::TextFormat;
     use egui::text::LayoutJob;
 
@@ -55,6 +65,17 @@ pub fn highlight_terminal_ansi(ui: &egui::Ui, text: &str) -> egui::text::LayoutJ
         egui::Color32::from_rgb(30, 30, 30)
     };
 
+    let search_highlight_bg = if is_dark {
+        egui::Color32::from_rgb(85, 80, 20)
+    } else {
+        egui::Color32::from_rgb(255, 235, 130)
+    };
+    let active_search_highlight_bg = if is_dark {
+        egui::Color32::from_rgb(180, 100, 20)
+    } else {
+        egui::Color32::from_rgb(255, 150, 50)
+    };
+
     let slices = categorise_text(text);
     for slice in slices {
         if slice.text.is_empty() {
@@ -66,24 +87,97 @@ pub fn highlight_terminal_ansi(ui: &egui::Ui, text: &str) -> egui::text::LayoutJ
 
         let fg = if slice.fg.is_none()
             || (fg_color == AnsiColor::Black && intensity == Intensity::Normal && is_dark)
-            || fg_color == AnsiColor::White && !is_dark
+            || (fg_color == AnsiColor::White && !is_dark)
         {
             default_fg
         } else {
             ansi_to_egui_color(fg_color, intensity, is_dark)
         };
 
-        let mut format = TextFormat {
-            font_id: font_id.clone(),
-            color: fg,
-            ..Default::default()
-        };
+        let slice_start = slice.start;
+        let slice_end = slice.end;
 
-        if slice.underline.unwrap_or(false) {
-            format.underline = egui::Stroke::new(1.0, fg);
+        // Check if slice overlaps with any search ranges
+        if let Some(ranges) = search_ranges {
+            // Slices are in byte coordinates
+            let mut cursor = slice_start;
+            while cursor < slice_end {
+                // Find next matching range that overlaps [cursor, slice_end)
+                let matching = ranges.iter().enumerate().find(|&(_, &(r_start, r_end))| {
+                    r_end > cursor && r_start < slice_end
+                });
+
+                match matching {
+                    Some((idx, &(r_start, r_end))) => {
+                        let seg_start = cursor;
+                        let match_start = r_start.max(cursor);
+
+                        if match_start > seg_start {
+                            // Substring before match
+                            let rel_start = seg_start - slice_start;
+                            let rel_end = match_start - slice_start;
+                            let mut format = TextFormat {
+                                font_id: font_id.clone(),
+                                color: fg,
+                                ..Default::default()
+                            };
+                            if slice.underline.unwrap_or(false) {
+                                format.underline = egui::Stroke::new(1.0, fg);
+                            }
+                            job.append(&slice.text[rel_start..rel_end], 0.0, format);
+                            cursor = match_start;
+                        }
+
+                        // The matched substring
+                        let match_end = r_end.min(slice_end);
+                        let rel_start = cursor - slice_start;
+                        let rel_end = match_end - slice_start;
+                        let bg = if idx == active_match_idx {
+                            active_search_highlight_bg
+                        } else {
+                            search_highlight_bg
+                        };
+                        let mut format = TextFormat {
+                            font_id: font_id.clone(),
+                            color: if is_dark { egui::Color32::WHITE } else { egui::Color32::BLACK },
+                            background: bg,
+                            ..Default::default()
+                        };
+                        if slice.underline.unwrap_or(false) {
+                            format.underline = egui::Stroke::new(1.0, format.color);
+                        }
+                        job.append(&slice.text[rel_start..rel_end], 0.0, format);
+                        cursor = match_end;
+                    }
+                    None => {
+                        // Remainder of the slice
+                        let rel_start = cursor - slice_start;
+                        let mut format = TextFormat {
+                            font_id: font_id.clone(),
+                            color: fg,
+                            ..Default::default()
+                        };
+                        if slice.underline.unwrap_or(false) {
+                            format.underline = egui::Stroke::new(1.0, fg);
+                        }
+                        job.append(&slice.text[rel_start..], 0.0, format);
+                        break;
+                    }
+                }
+            }
+        } else {
+            let mut format = TextFormat {
+                font_id: font_id.clone(),
+                color: fg,
+                ..Default::default()
+            };
+
+            if slice.underline.unwrap_or(false) {
+                format.underline = egui::Stroke::new(1.0, fg);
+            }
+
+            job.append(slice.text, 0.0, format);
         }
-
-        job.append(slice.text, 0.0, format);
     }
 
     job
